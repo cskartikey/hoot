@@ -89,6 +89,10 @@ final class ExplainerPanelManager: ObservableObject {
     /// The finished video's address, for opening it in the large window.
     private var currentFinishedVideoURL: URL?
     private var largeExplainerVideoWindow: NSWindow?
+    /// The big window's own player; must be stopped when that window closes,
+    /// otherwise its audio keeps playing with nothing on screen.
+    private var largeExplainerVideoPlayer: AVPlayer?
+    private var largeWindowCloseObserver: NSObjectProtocol?
     private var currentVideoTitleForLargeWindow = "hoot"
     @Published private(set) var currentCaptionText: String?
     @Published private(set) var hasVideoFinishedPlaying: Bool = false
@@ -190,6 +194,9 @@ final class ExplainerPanelManager: ObservableObject {
     func close() {
         onExplainerPanelClosed?()
         cancelActiveJobAndPlayback()
+        // Closing the panel ends the video everywhere, big window included.
+        stopLargeWindowPlayback()
+        largeExplainerVideoWindow?.orderOut(nil)
         removeEscapeKeyMonitors()
         explainerPanel?.orderOut(nil)
     }
@@ -231,8 +238,10 @@ final class ExplainerPanelManager: ObservableObject {
         explainerVideoPlayer?.pause()
         isVideoPlaying = false
 
+        stopLargeWindowPlayback()
         let largeVideoPlayer = AVPlayer(url: currentFinishedVideoURL)
         largeVideoPlayer.seek(to: resumeTime)
+        largeExplainerVideoPlayer = largeVideoPlayer
 
         let largePlayerView = AVPlayerView()
         largePlayerView.player = largeVideoPlayer
@@ -257,11 +266,26 @@ final class ExplainerPanelManager: ObservableObject {
         largeVideoWindow.setContentSize(windowContentRect.size)
         largeVideoWindow.center()
         largeExplainerVideoWindow = largeVideoWindow
+        if largeWindowCloseObserver == nil {
+            largeWindowCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: largeVideoWindow,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stopLargeWindowPlayback() }
+            }
+        }
 
         // A menu-bar app has to activate to put a normal window in front.
         NSApp.activate(ignoringOtherApps: true)
         largeVideoWindow.makeKeyAndOrderFront(nil)
         largeVideoPlayer.play()
+    }
+
+    private func stopLargeWindowPlayback() {
+        largeExplainerVideoPlayer?.pause()
+        largeExplainerVideoPlayer = nil
+        (largeExplainerVideoWindow?.contentView as? AVPlayerView)?.player = nil
     }
 
     func toggleCurrentVideoBookmark() {
