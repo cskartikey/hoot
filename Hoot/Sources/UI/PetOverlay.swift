@@ -21,6 +21,13 @@ final class PetOverlayManager {
     private var areOverlaysShown = false
     private var themeCancellable: AnyCancellable?
     private var screenParametersObserver: NSObjectProtocol?
+    /// A small clickable window over the dozing corner hoot (the overlay
+    /// itself lets every click through).
+    private var cornerPetClickTargetWindow: CornerPetClickTargetWindow?
+    private var cornerPetClickTargetRefreshTimer: Timer?
+
+    /// Called when the user clicks the corner hoot.
+    var onCornerPetClicked: (() -> Void)?
 
     init(hootController: HootController) {
         self.hootController = hootController
@@ -53,11 +60,15 @@ final class PetOverlayManager {
         areOverlaysShown = true
         rebuildOverlayWindows()
         petOverlayCoordinator.startFrameTicks()
+        startCornerPetClickTarget()
     }
 
     func hideOverlays() {
         areOverlaysShown = false
         petOverlayCoordinator.stopFrameTicks()
+        cornerPetClickTargetRefreshTimer?.invalidate()
+        cornerPetClickTargetRefreshTimer = nil
+        cornerPetClickTargetWindow?.orderOut(nil)
         for overlayWindow in overlayWindows {
             overlayWindow.orderOut(nil)
         }
@@ -86,6 +97,47 @@ final class PetOverlayManager {
             overlayWindow.setFrame(screen.frame, display: false)
             overlayWindow.orderFrontRegardless()
             return overlayWindow
+        }
+    }
+
+    // MARK: - Corner hoot click target
+
+    private func startCornerPetClickTarget() {
+        if cornerPetClickTargetWindow == nil {
+            let clickTargetWindow = CornerPetClickTargetWindow()
+            clickTargetWindow.onClick = { [weak self] in self?.onCornerPetClicked?() }
+            cornerPetClickTargetWindow = clickTargetWindow
+        }
+        cornerPetClickTargetRefreshTimer?.invalidate()
+        // Cheap: just follows whether hoot is dozing at home and where home is.
+        cornerPetClickTargetRefreshTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshCornerPetClickTarget() }
+        }
+        refreshCornerPetClickTarget()
+    }
+
+    private func refreshCornerPetClickTarget() {
+        guard let cornerPetClickTargetWindow else { return }
+        let isHootDozingInCorner = areOverlaysShown
+            && petOverlayCoordinator.phase == .home
+            && petOverlayCoordinator.isCornerHootAllowed
+        guard isHootDozingInCorner else {
+            if cornerPetClickTargetWindow.isVisible { cornerPetClickTargetWindow.orderOut(nil) }
+            return
+        }
+        let homeCenter = PetOverlayCoordinator.homeCenterInGlobalSpace()
+        let clickTargetSide = CornerPetClickTargetWindow.sideLength
+        let clickTargetFrame = NSRect(
+            x: homeCenter.x - clickTargetSide / 2,
+            y: homeCenter.y - clickTargetSide / 2,
+            width: clickTargetSide,
+            height: clickTargetSide
+        )
+        if cornerPetClickTargetWindow.frame != clickTargetFrame {
+            cornerPetClickTargetWindow.setFrame(clickTargetFrame, display: false)
+        }
+        if !cornerPetClickTargetWindow.isVisible {
+            cornerPetClickTargetWindow.orderFrontRegardless()
         }
     }
 
@@ -121,4 +173,56 @@ private final class PetOverlayWindow: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+/// An invisible, clickable square sitting exactly over the dozing corner
+/// hoot, one level above the overlay. Shows the pointing hand on hover.
+private final class CornerPetClickTargetWindow: NSPanel {
+    static let sideLength: CGFloat = 52
+
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: Self.sideLength, height: Self.sideLength),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        isOpaque = false
+        // Fully clear windows don't receive clicks, so keep a whisper of alpha.
+        backgroundColor = NSColor.black.withAlphaComponent(0.001)
+        hasShadow = false
+        level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+
+        contentView = CornerPetClickTargetView(onClick: { [weak self] in self?.onClick?() })
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class CornerPetClickTargetView: NSView {
+    private let onClick: () -> Void
+
+    init(onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: .zero)
+        toolTip = "open hoot"
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseUp(with event: NSEvent) {
+        onClick()
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
 }

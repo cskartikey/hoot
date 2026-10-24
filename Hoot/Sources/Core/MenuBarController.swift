@@ -139,7 +139,7 @@ final class MenuBarController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.isMovable = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let menuPanelView = MenuPanelView(
             hootController: hootController,
@@ -186,7 +186,10 @@ final class MenuBarController {
     /// Centered under the status item, kept inside the screen, top edge just
     /// below the menu bar so the panel grows downward.
     private func panelFrame(forContentHeight contentHeight: CGFloat) -> NSRect {
-        let statusItemFrameOnScreen = statusItem.button?.window?.frame
+        // A crowded menu bar (or the notch) can push the status item out of
+        // sight; then anchor to the top-right of the main screen instead of
+        // an invisible icon.
+        let statusItemFrameOnScreen = isStatusItemVisibleOnScreen ? statusItem.button?.window?.frame : nil
         let screen = statusItem.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
@@ -201,6 +204,15 @@ final class MenuBarController {
         return NSRect(x: panelOriginX, y: panelTopY - contentHeight, width: Self.panelWidth, height: contentHeight)
     }
 
+    /// False when macOS has hidden the status item (too many menu bar items,
+    /// or it sits behind the notch).
+    private var isStatusItemVisibleOnScreen: Bool {
+        guard let statusItemWindow = statusItem.button?.window,
+              statusItemWindow.occlusionState.contains(.visible),
+              let statusItemScreen = statusItemWindow.screen else { return false }
+        return statusItemScreen.frame.intersects(statusItemWindow.frame)
+    }
+
     // MARK: - Dismissal
 
     private func installDismissMonitors() {
@@ -209,7 +221,13 @@ final class MenuBarController {
         // Global monitors only see clicks in other apps, which is exactly
         // "outside": clicks inside the panel and on the status item are ours.
         globalMouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor in self?.hidePanel() }
+            Task { @MainActor in
+                guard let self else { return }
+                // During onboarding the panel stays put: granting a permission
+                // means clicking in System Settings, which is an "outside" click.
+                guard self.hootController.permissionCenter.allPermissionsGranted else { return }
+                self.hidePanel()
+            }
         }
         localEscapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] keyEvent in
             guard keyEvent.keyCode == Self.escapeKeyCode else { return keyEvent }

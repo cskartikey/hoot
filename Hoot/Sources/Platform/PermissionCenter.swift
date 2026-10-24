@@ -84,7 +84,15 @@ final class PermissionCenter: ObservableObject {
         // effect after the learner toggles hoot on in System Settings.
         let wasGranted = CGRequestScreenCaptureAccess()
         if !wasGranted {
-            openSystemSettingsForScreenRecording()
+            // Recent macOS only lists an app under Screen Recording once it has
+            // actually tried to capture. Asking ScreenCaptureKit for content
+            // makes that attempt, so hoot shows up in the list to toggle on.
+            Task { @MainActor [weak self] in
+                _ = try? await SCShareableContent.current
+                self?.openSystemSettingsForScreenRecording()
+                self?.refreshNow()
+            }
+            return
         }
         refreshNow()
     }

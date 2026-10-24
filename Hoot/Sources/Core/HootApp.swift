@@ -44,6 +44,11 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
         hootController.start()
         menuBarController = MenuBarController(hootController: hootController)
 
+        // Clicking the dozing corner hoot opens the panel too.
+        petOverlayManager.onCornerPetClicked = { [weak self] in
+            self?.menuBarController?.togglePanel()
+        }
+
         wireExplainerPanel(hootController: hootController, explainerPanelManager: explainerPanelManager)
         showPetOverlaysOncePermissionsAreGranted(hootController: hootController)
 
@@ -55,6 +60,13 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         triggerDebugExplainerRequestIfRequested(hootController: hootController)
+    }
+
+    /// Opening hoot again (Finder, Spotlight, the Dock) shows the panel — a way
+    /// in even when the menu bar is too crowded to show hoot's icon.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        menuBarController?.showPanel()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
