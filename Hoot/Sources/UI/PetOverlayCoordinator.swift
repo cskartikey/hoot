@@ -158,7 +158,9 @@ final class PetOverlayCoordinator: ObservableObject {
     /// Full body at home: dozing (the `presenting` frames), awake for a
     /// moment right after landing.
     var fullBodyAnimationState: PetAnimationState {
-        isFullBodyAwakeAfterLanding ? .idle : .presenting
+        // Waves while a corner nudge is up (PetOverlayManager re-renders on change).
+        if NudgeCenter.shared.currentNudge != nil { return .hello }
+        return isFullBodyAwakeAfterLanding ? .idle : .presenting
     }
 
     /// The head listens while ⌃⌥ is held, darts its eyes while thinking,

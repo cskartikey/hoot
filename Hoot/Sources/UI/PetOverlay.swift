@@ -29,6 +29,13 @@ final class PetOverlayManager {
     /// Called when the user clicks the corner hoot.
     var onCornerPetClicked: (() -> Void)?
 
+    /// Whether the full hoot is dozing in the corner right now (overlays
+    /// shown, phase .home, corner hoot allowed). Corner nudges sit beside it
+    /// when true and fall back to the screen corner when false.
+    private(set) static var isCornerHootDozingOnScreen = false
+    /// Redraws the corner hoot in its `hello` pose while a nudge is up.
+    private var nudgeCancellable: AnyCancellable?
+
     init(hootController: HootController) {
         self.hootController = hootController
         self.petOverlayCoordinator = PetOverlayCoordinator(hootController: hootController)
@@ -40,6 +47,17 @@ final class PetOverlayManager {
         themeCancellable = WaitWhatThemeStore.shared.$theme
             .sink { [weak self] updatedTheme in
                 self?.applyAppearance(isDark: updatedTheme.isDark)
+            }
+
+        // The coordinator reads `NudgeCenter.shared.currentNudge` for the
+        // pose; nudges aren't part of its published state, so tell its
+        // views to re-render whenever a nudge comes or goes.
+        nudgeCancellable = NudgeCenter.shared.$currentNudge
+            .map { $0?.id }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.petOverlayCoordinator.objectWillChange.send()
             }
 
         // Displays plugged in, removed, rearranged or resized.
@@ -65,6 +83,7 @@ final class PetOverlayManager {
 
     func hideOverlays() {
         areOverlaysShown = false
+        Self.isCornerHootDozingOnScreen = false
         petOverlayCoordinator.stopFrameTicks()
         cornerPetClickTargetRefreshTimer?.invalidate()
         cornerPetClickTargetRefreshTimer = nil
@@ -121,6 +140,7 @@ final class PetOverlayManager {
         let isHootDozingInCorner = areOverlaysShown
             && petOverlayCoordinator.phase == .home
             && petOverlayCoordinator.isCornerHootAllowed
+        Self.isCornerHootDozingOnScreen = isHootDozingInCorner
         guard isHootDozingInCorner else {
             if cornerPetClickTargetWindow.isVisible { cornerPetClickTargetWindow.orderOut(nil) }
             return
