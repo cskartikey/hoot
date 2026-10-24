@@ -37,7 +37,8 @@ enum PetOverlayAnswerText {
         }
 
         // A POINT tag, or a VIDEO/SKETCH tag whose "]" has not arrived yet, hides the rest.
-        for tagOpening in ["[POINT:", "[VIDEO:", "[SKETCH:", "[CONCEPT:", "[REVIEW:", "[CHECK:", "[PREDICT", "[DRAW:"] {
+        // MARK: - Napkin sketch ("[NAPKIN" is in the list: the block is never shown)
+        for tagOpening in ["[POINT:", "[VIDEO:", "[SKETCH:", "[CONCEPT:", "[REVIEW:", "[CHECK:", "[PREDICT", "[DRAW:", "[NAPKIN"] {
             if let tagOpeningRange = remainingText.range(of: tagOpening) {
                 remainingText = String(remainingText[..<tagOpeningRange.lowerBound])
             }
