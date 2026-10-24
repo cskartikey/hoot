@@ -47,6 +47,9 @@ final class PetOverlayCoordinator: ObservableObject {
         case flyingHome
         /// No corner hoot to go back to: the head fades out where it is.
         case fadingOut
+        /// Walkthrough mode: `PetWalkthroughCoordinator` drives the frame and
+        /// the head until it reports `hasFinished`.
+        case walkthrough
     }
 
     // MARK: Published state for the screen views
@@ -136,9 +139,15 @@ final class PetOverlayCoordinator: ObservableObject {
     /// A new hold from farther than this flies hoot back over to the cursor.
     private let distanceFromCursorThatTriggersFlightBack: CGFloat = 48
 
+    /// The walkthrough's stepped driver (see `.walkthrough`).
+    let walkthroughCoordinator = PetWalkthroughCoordinator()
+
     init(hootController: HootController) {
         self.hootController = hootController
         self.petCenterInGlobalSpace = Self.homeCenterInGlobalSpace()
+        walkthroughCoordinator.flyHead = { [weak self] destination, onLanding in
+            self?.flyHeadForWalkthrough(to: destination, onLanding: onLanding)
+        }
     }
 
     // MARK: - Derived state (read by the screen views)
@@ -156,8 +165,10 @@ final class PetOverlayCoordinator: ObservableObject {
         phase == .home ? isCornerHootAllowed : true
     }
 
+    /// Also true through a walkthrough: the head hops in stepped lockstep
+    /// with the frame, and a spring on top would smear the steps.
     var isPetFlying: Bool {
-        activeFlight != nil
+        activeFlight != nil || phase == .walkthrough
     }
 
     /// Full body at home: dozing (the `presenting` frames), awake for a
@@ -175,6 +186,8 @@ final class PetOverlayCoordinator: ObservableObject {
         switch phase {
         case .flyingToTarget, .pointingAtTarget:
             return isResponseAudioPlaying ? .talking : .pointing
+        case .walkthrough:
+            return walkthroughCoordinator.headAnimationState(isAudioPlaying: isResponseAudioPlaying)
         case .lingering, .flyingHome, .fadingOut, .home:
             return .idle
         case .flyingToCursor, .atCursor, .flyingBackToCursor:
@@ -194,6 +207,7 @@ final class PetOverlayCoordinator: ObservableObject {
 
     /// Mirror the head so it faces a target to its left.
     var isHeadMirroredTowardTarget: Bool {
+        if phase == .walkthrough { return walkthroughCoordinator.isHeadFacingLeft }
         guard phase == .flyingToTarget || phase == .pointingAtTarget,
               let pointingTargetInGlobalSpace else { return false }
         return pointingTargetInGlobalSpace.x < petCenterInGlobalSpace.x
@@ -256,10 +270,17 @@ final class PetOverlayCoordinator: ObservableObject {
         }
 
         handleDetectedElementLocationIfChanged(cursorLocation: cursorLocation)
+        handleWalkthroughIfPresent(cursorLocation: cursorLocation)
 
         advanceActiveFlight(now: now, cursorLocation: cursorLocation)
 
         switch phase {
+        case .walkthrough:
+            // Driven above; the head follows the walkthrough's stepped position.
+            if activeFlight == nil, let walkthroughHeadCenter = walkthroughCoordinator.headCenterInGlobalSpace,
+               walkthroughHeadCenter != petCenterInGlobalSpace {
+                petCenterInGlobalSpace = walkthroughHeadCenter
+            }
         case .home:
             keepCornerHootInPlace()
         case .atCursor:
@@ -408,6 +429,14 @@ final class PetOverlayCoordinator: ObservableObject {
                 parkedHeadCenterInGlobalSpace = nil
                 flyBackToCursorAfterPointing()
             }
+        case .walkthrough:
+            // A new question ends the walkthrough (the controller already
+            // dropped it): the frame vanishes and hoot comes back over.
+            if isNewRecording {
+                walkthroughCoordinator.abort()
+                parkedHeadCenterInGlobalSpace = nil
+                flyToCursor()
+            }
         case .flyingToCursor, .flyingBackToCursor:
             break
         }
@@ -527,6 +556,7 @@ final class PetOverlayCoordinator: ObservableObject {
             isPointingRingShown = false
             pointingFrameAnimationTask?.cancel()
             pointingFrameOpacity = 0
+            walkthroughCoordinator.abort()
         }
     }
 
@@ -675,6 +705,79 @@ final class PetOverlayCoordinator: ObservableObject {
             self.hootQuietSinceDate = nil
             self.phase = .atCursor
             self.hootController.clearDetectedElementLocation()
+        }
+    }
+
+    // MARK: - Walkthrough
+
+    /// Hands over to the walkthrough driver once the controller has a
+    /// walkthrough with a spoken step, and takes control back when the
+    /// driver's out animation has ended.
+    private func handleWalkthroughIfPresent(cursorLocation: CGPoint) {
+        let walkthroughState = hootController.walkthrough
+
+        if phase == .walkthrough {
+            walkthroughCoordinator.update(
+                state: walkthroughState,
+                cursorLocation: cursorLocation,
+                isAudioPlaying: isResponseAudioPlaying
+            )
+            if walkthroughCoordinator.hasFinished {
+                walkthroughCoordinator.reset()
+                // Stay put where the walkthrough ended; the normal quiet →
+                // linger → home logic takes it from here.
+                parkedHeadCenterInGlobalSpace = petCenterInGlobalSpace
+                hootQuietSinceDate = nil
+                phase = .atCursor
+            }
+            return
+        }
+
+        guard let walkthroughState, !walkthroughState.steps.isEmpty else { return }
+        switch walkthroughState.phase {
+        case .gathering, .ended:
+            return
+        case .step, .waiting, .peek, .checking, .done, .missed:
+            break
+        }
+        guard phase != .flyingToCursor, phase != .flyingBackToCursor else { return }
+
+        // Same prologue as pointing: leave the corner, or pop in, if needed.
+        if phase == .home {
+            if isCornerHootAllowed {
+                isPetDrawnAsFullBody = false
+                petGrowScale = 1
+                petSessionOpacity = 1
+            } else {
+                popHeadInAtCursor(cursorLocation: cursorLocation)
+            }
+        } else if phase == .fadingOut {
+            withAnimation(.easeOut(duration: 0.12)) {
+                petSessionOpacity = 1
+            }
+        }
+        if phase == .pointingAtTarget || phase == .flyingToTarget {
+            isPointingRingShown = false
+            animatePointingFrameOut()
+            pointingTargetInGlobalSpace = nil
+        }
+        hootQuietSinceDate = nil
+        phase = .walkthrough
+        walkthroughCoordinator.update(
+            state: walkthroughState,
+            cursorLocation: cursorLocation,
+            isAudioPlaying: isResponseAudioPlaying
+        )
+    }
+
+    /// The existing arc + trail, for the walkthrough's first approach and
+    /// its far-move fallback.
+    private func flyHeadForWalkthrough(to destination: CGPoint, onLanding: @escaping () -> Void) {
+        let flightDistance = hypot(destination.x - petCenterInGlobalSpace.x, destination.y - petCenterInGlobalSpace.y)
+        let flightDuration = min(max(flightDistance / 1100, 0.35), 0.8)
+        startFlight(destination: .fixedPoint(destination), durationInSeconds: flightDuration) { [weak self] in
+            guard let self, self.phase == .walkthrough else { return }
+            onLanding()
         }
     }
 

@@ -184,6 +184,43 @@ final class LLMClient {
         return accumulatedAnswerText
     }
 
+    // MARK: - Walkthrough
+
+    /// One non-streaming call with caller-built content blocks (the
+    /// walkthrough's before/after screenshots). Same body shape as the
+    /// tutor call; the worker answers `{content:[{type:"text",text}]}` for
+    /// both brains when `stream` is false.
+    func requestCompleteAnswer(systemPrompt: String, userContentBlocks: [[String: Any]]) async throws -> String {
+        let chatURLString = "\(workerBaseURL)/chat"
+        guard let chatURL = URL(string: chatURLString) else {
+            throw LLMClientError.invalidWorkerURL(chatURLString)
+        }
+        var chatRequest = URLRequest(url: chatURL)
+        chatRequest.httpMethod = "POST"
+        chatRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        chatRequest.setValue("application/json", forHTTPHeaderField: "accept")
+        chatRequest.timeoutInterval = 40
+        chatRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "max_tokens": 300,
+            "stream": false,
+            "system": systemPrompt,
+            "messages": [["role": "user", "content": userContentBlocks]],
+        ] as [String: Any])
+
+        let (responseData, urlResponse) = try await urlSession.data(for: chatRequest)
+        let statusCode = (urlResponse as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(statusCode) else {
+            let responseBody = String(data: responseData, encoding: .utf8) ?? "<\(responseData.count) non-UTF-8 bytes>"
+            throw LLMClientError.httpError(statusCode: statusCode, responseBody: responseBody)
+        }
+        guard let responsePayload = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let contentBlocks = responsePayload["content"] as? [[String: Any]] else {
+            throw LLMClientError.streamReportedError("the worker's reply had no content blocks")
+        }
+        return contentBlocks.compactMap { $0["text"] as? String }.joined()
+    }
+
     private func makeAnthropicMessagesRequestBody(
         screenshots: [CapturedScreen],
         systemPrompt: String,

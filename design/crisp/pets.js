@@ -137,6 +137,8 @@
     const put = (x, y, c) => { r[y][x] = c; };
     if (o.alert) { r[0] = '.o........o.'.split(''); r[1] = '.bo......ob.'.split(''); r[2] = '.bbo....obb.'.split(''); }
     if (o.eyes === 'closed') { [2, 3, 8, 9].forEach(x => { put(x, 6, 'f'); put(x, 7, 'e'); }); }
+    // happy: the closed-eye line raised one row = smile-eyes (^ ^)
+    else if (o.eyes === 'happy') { [2, 3, 8, 9].forEach(x => { put(x, 6, 'e'); put(x, 7, 'f'); }); }
     else if (o.look) { [2, 3, 8, 9].forEach(x => { put(x, 6, 'w'); put(x, 7, 'w'); }); const [dx, dy] = o.look; put(dx > 0 ? 3 : 2, dy < 0 ? 6 : 7, 'e'); put(dx > 0 ? 9 : 8, dy < 0 ? 6 : 7, 'e'); }
     if (o.mouth === 'open') { put(5, 9, 'm'); put(6, 9, 'm'); }
     r = r.map(row => row.map(c => (c === '.' ? null : c)));
@@ -147,7 +149,12 @@
     idle: [[{}, 600], [{ bob: 1 }, 600], [{}, 600], [{ eyes: 'closed' }, 130]],
     listening: [[{ alert: 1 }, 260], [{ alert: 1, bob: 1 }, 260]],
     thinking: [[{ look: [-1, -1] }, 360], [{ look: [1, -1] }, 360]],
-    talking: [[{ mouth: 'open' }, 150], [{}, 170], [{ mouth: 'open', bob: 1 }, 150], [{}, 200]]
+    talking: [[{ mouth: 'open' }, 150], [{}, 170], [{ mouth: 'open', bob: 1 }, 150], [{}, 200]],
+    // walkthrough (WALKTHROUGH.md): look ↘ at what the learner is doing, blink 130 every 2000; no bob
+    watching: [[{ look: [1, 1] }, 1000], [{ look: [1, 1] }, 870], [{ eyes: 'closed' }, 130]],
+    watchingIn: [[{ alert: 1, look: [1, 1] }, 1000], [{ alert: 1, look: [1, 1] }, 870], [{ alert: 1, eyes: 'closed' }, 130]],
+    peek: [[{ alert: 1, look: [0, 1] }, 120], [{ alert: 1, look: [0, -1] }, 120]],
+    happy: [[{ eyes: 'happy' }, 160], [{ eyes: 'happy', bob: 1 }, 160], [{ eyes: 'happy' }, 680]]
   };
   function build(pet, o) {
     let g = DRAW[pet](o);

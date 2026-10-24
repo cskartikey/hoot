@@ -240,6 +240,83 @@ final class HootController: ObservableObject {
         detectedElementBoxSize = nil
     }
 
+    // MARK: - Walkthrough
+
+    /// The live walkthrough (docs/design/WALKTHROUGH.md), or nil. Steps are
+    /// appended as their [STEP] tags stream in; the phase moves on sentence
+    /// starts and, after the last sentence, through the watch-and-confirm
+    /// loop. Cleared by the next ⌃⌥ hold.
+    @Published private(set) var walkthrough: HootWalkthroughState?
+    private var walkthroughRunner: HootWalkthroughRunner?
+
+    /// Ends and forgets the walkthrough (a new question, stop).
+    private func endWalkthrough() {
+        walkthroughRunner?.end()
+        walkthroughRunner = nil
+        walkthrough = nil
+    }
+
+    /// Parses any step tags that have completed in the stream so far and
+    /// resolves the new ones to global coordinates, so step k's frame is
+    /// ready before sentence k's clip starts.
+    private func noteWalkthroughSteps(inStreamingResponse accumulatedResponseText: String, capturedScreens: [CapturedScreen]) {
+        let parsedSteps = HootWalkthroughTags.parseSteps(from: accumulatedResponseText)
+        guard !parsedSteps.isEmpty else { return }
+        let totalStepCount = parsedSteps.map(\.totalStepCount).max() ?? parsedSteps.count
+        if walkthroughRunner == nil {
+            walkthroughRunner = HootWalkthroughRunner(totalStepCount: totalStepCount) { [weak self] updatedState in
+                self?.walkthrough = updatedState
+            }
+        }
+        guard let walkthroughRunner else { return }
+        let alreadyHandledCount = walkthroughRunner.handledParsedStepCount
+        guard parsedSteps.count > alreadyHandledCount else { return }
+        walkthroughRunner.handledParsedStepCount = parsedSteps.count
+        let newSteps: [HootWalkthroughStep] = parsedSteps[alreadyHandledCount...].enumerated().compactMap { offset, parsedStep in
+            guard let resolvedLocation = HootResponseTags.resolvePointingTarget(parsedStep.pointingTarget, capturedScreens: capturedScreens) else { return nil }
+            return HootWalkthroughStep(
+                stepNumber: alreadyHandledCount + offset + 1,
+                label: parsedStep.pointingTarget.label,
+                globalCenter: resolvedLocation.globalLocation,
+                globalBoxSize: resolvedLocation.globalBoxSize,
+                displayFrame: resolvedLocation.displayFrame
+            )
+        }
+        walkthroughRunner.appendSteps(newSteps, totalStepCount: totalStepCount)
+    }
+
+    /// Which walkthrough step a sentence occupying `sentenceRange` (character
+    /// offsets in the speakable text) starts, if any.
+    private func walkthroughStepIndex(forSentenceIn sentenceRange: Range<Int>, responseText: String) -> Int? {
+        guard walkthroughRunner != nil else { return nil }
+        let stepStartOffsets = HootWalkthroughTags.stripStepTags(from: responseText).stepStartOffsets
+        return HootWalkthroughTags.stepIndex(startedBySentenceIn: sentenceRange, stepStartOffsets: stepStartOffsets)
+    }
+
+    /// After the steps are spoken: wait, look, confirm (see the runner).
+    /// Speaks the verdict sentence with Cartesia; stays cancellable through
+    /// the answer generation like the rest of the pipeline.
+    private func runWalkthroughWatchAndConfirm(question: String, capturedScreens: [CapturedScreen], pipelineGeneration: Int) async {
+        guard let walkthroughRunner, walkthroughRunner.hasSteps else { return }
+        await walkthroughRunner.runWatchAndConfirm(
+            question: question,
+            beforeScreens: capturedScreens,
+            llmClient: llmClient,
+            speak: { [weak self] sentence in
+                guard let self, self.isCurrentGeneration(pipelineGeneration) else { return }
+                self.streamingResponseText = sentence
+                try? await self.cartesiaTTSClient.speakText(sentence)
+                while self.cartesiaTTSClient.isPlaying, self.isCurrentGeneration(pipelineGeneration) {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            },
+            isCancelled: { [weak self] in
+                guard let self else { return true }
+                return !self.isCurrentGeneration(pipelineGeneration)
+            }
+        )
+    }
+
     // MARK: - Voice input wiring
 
     private func wireVoiceInput() {
@@ -346,6 +423,8 @@ final class HootController: ObservableObject {
             fallbackSpeechSynthesizer.stopSpeaking()
         }
         isAnswerPipelineRunning = false
+        // Any new question ends a walkthrough (MARK: Walkthrough).
+        endWalkthrough()
     }
 
     // MARK: - Answer pipeline
@@ -482,6 +561,9 @@ final class HootController: ObservableObject {
                 userPrompt: userPromptWithVideoContext,
                 onTextChunk: { [weak self] accumulatedResponseText in
                     guard let self, self.isCurrentGeneration(pipelineGeneration) else { return }
+                    // Walkthrough: step tags come before their sentences, so
+                    // resolve them before the sentence is handed to TTS.
+                    self.noteWalkthroughSteps(inStreamingResponse: accumulatedResponseText, capturedScreens: capturedScreens)
                     self.enqueueCompletedSentences(
                         from: accumulatedResponseText,
                         streamingSpeechState: streamingSpeechState
@@ -544,7 +626,9 @@ final class HootController: ObservableObject {
                 )
             }
 
-            if let pointingTarget = HootResponseTags.parsePointingTarget(from: explainerVideoParseResult.textWithoutVideoTag),
+            // A walkthrough's steps carry the boxes; its final tag is [POINT:none].
+            if walkthroughRunner == nil,
+               let pointingTarget = HootResponseTags.parsePointingTarget(from: explainerVideoParseResult.textWithoutVideoTag),
                let resolvedPointingLocation = HootResponseTags.resolvePointingTarget(pointingTarget, capturedScreens: capturedScreens) {
                 // Frame and label first, so an observer of the location sees
                 // all three already set.
@@ -607,7 +691,13 @@ final class HootController: ObservableObject {
             // let the queue drain.
             if !didTextToSpeechFailBeforeAnyAudio {
                 let unspokenRemainder = String(spokenText.dropFirst(streamingSpeechState.enqueuedCharacterCount))
-                cartesiaTTSClient.enqueueSentence(unspokenRemainder)
+                cartesiaTTSClient.enqueueSentence(
+                    unspokenRemainder,
+                    walkthroughStepIndex: walkthroughStepIndex(
+                        forSentenceIn: streamingSpeechState.enqueuedCharacterCount..<max(spokenText.count, streamingSpeechState.enqueuedCharacterCount),
+                        responseText: fullResponseText
+                    )
+                )
             }
             cartesiaTTSClient.finishSpokenAnswer()
             if spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -629,6 +719,16 @@ final class HootController: ObservableObject {
                     await speakWithFallbackVoice(trimmedSpokenText, pipelineGeneration: pipelineGeneration)
                 }
             }
+
+            // Walkthrough: the steps are spoken; now watch the learner do them
+            // and confirm. The pipeline stays "running" so hoot doesn't leave.
+            if walkthroughRunner != nil {
+                await runWalkthroughWatchAndConfirm(
+                    question: questionText,
+                    capturedScreens: capturedScreens,
+                    pipelineGeneration: pipelineGeneration
+                )
+            }
         } catch {
             guard isCurrentGeneration(pipelineGeneration) else { return }
             NSLog("⚠️ hoot answer error: %@", String(describing: error))
@@ -642,6 +742,8 @@ final class HootController: ObservableObject {
         }
 
         guard isCurrentGeneration(pipelineGeneration) else { return }
+        // Walkthrough: over either way (confirmed, given up, or the answer failed).
+        walkthroughRunner?.end()
         voiceState = .idle
         isAnswerPipelineRunning = false
         currentAnswerTask = nil
@@ -800,6 +902,11 @@ final class HootController: ObservableObject {
             // the full text; stop feeding Cartesia so it doesn't start mid-answer.
             self.didTextToSpeechFailBeforeAnyAudio = true
         }
+        // Walkthrough: sentence k's clip start is what lands step k's frame.
+        cartesiaTTSClient.onSentenceStarted = { [weak self] _, walkthroughStepIndex in
+            guard let self, pipelineGeneration == self.answerGeneration, let walkthroughStepIndex else { return }
+            self.walkthroughRunner?.noteSentenceStarted(forStepIndex: walkthroughStepIndex)
+        }
         cartesiaTTSClient.beginSpokenAnswer()
     }
 
@@ -809,16 +916,16 @@ final class HootController: ObservableObject {
     /// clips aren't choppy.
     private func enqueueCompletedSentences(from accumulatedResponseText: String, streamingSpeechState: StreamingSpeechState) {
         guard !didTextToSpeechFailBeforeAnyAudio else { return }
-        let speakableText: Substring
-        if let firstTagStart = accumulatedResponseText.firstIndex(of: "[") {
-            speakableText = accumulatedResponseText[..<firstTagStart]
-        } else {
-            speakableText = accumulatedResponseText[...]
-        }
+        // Same rule as the final text (walkthrough step tags stripped, cut at
+        // the first other tag), so the enqueued count stays valid.
+        let speakableText = HootResponseTags.speakableText(from: accumulatedResponseText)
         guard speakableText.count > streamingSpeechState.enqueuedCharacterCount else { return }
 
         let notYetEnqueuedText = speakableText.dropFirst(streamingSpeechState.enqueuedCharacterCount)
-        let minimumSentenceLength = 24
+        // Walkthrough: every sentence is its own step and must start its own
+        // clip, so nothing is merged ("click share." is meant to be short).
+        let isWalkthrough = walkthroughRunner != nil
+        let minimumSentenceLength = isWalkthrough ? 1 : 24
         var sentenceStartOffset = 0
         var characterOffset = 0
         var previousCharacter: Character?
@@ -831,7 +938,16 @@ final class HootController: ObservableObject {
                 let sentenceLength = characterOffset - sentenceStartOffset
                 if sentenceLength >= minimumSentenceLength {
                     let sentenceText = String(notYetEnqueuedText.dropFirst(sentenceStartOffset).prefix(sentenceLength))
-                    cartesiaTTSClient.enqueueSentence(sentenceText)
+                    let sentenceStartInSpeakableText = streamingSpeechState.enqueuedCharacterCount
+                    cartesiaTTSClient.enqueueSentence(
+                        sentenceText,
+                        walkthroughStepIndex: isWalkthrough
+                            ? walkthroughStepIndex(
+                                forSentenceIn: sentenceStartInSpeakableText..<(sentenceStartInSpeakableText + sentenceLength),
+                                responseText: accumulatedResponseText
+                            )
+                            : nil
+                    )
                     streamingSpeechState.enqueuedCharacterCount += sentenceLength
                     sentenceStartOffset = characterOffset
                 }
