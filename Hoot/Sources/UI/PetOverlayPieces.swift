@@ -76,20 +76,22 @@ struct PetListeningBarsView: View {
 
 /// ≈150pt glass bubble under the head with the live transcript
 /// (SF 11.5 ink2, 1.35 line height). Draws nothing until words arrive.
+/// Long questions show their newest words (see `tailWindow`).
 struct PetListeningTranscriptBubbleView: View {
     let liveTranscriptText: String
     let theme: WaitWhatTheme
 
     static let bubbleWidth: CGFloat = 150
+    /// About five lines at this width.
+    private static let maximumShownCharacterCount = 110
 
     var body: some View {
-        Text(liveTranscriptText)
+        Text(PetOverlayAnswerText.tailWindow(of: liveTranscriptText, maximumCharacterCount: Self.maximumShownCharacterCount))
             .font(.system(size: 11.5))
             .foregroundColor(theme.ink2)
             .lineSpacing(2)
-            .lineLimit(5)
-            // Long questions keep their newest words in view.
-            .truncationMode(.head)
+            .lineLimit(6)
+            .truncationMode(.tail)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 7)
@@ -128,12 +130,16 @@ struct PetThinkingDotsView: View {
 
 /// ≈180pt glass bubble under the head while hoot talks: the pet's name
 /// (JBM 9.5 muted) over the answer (SF 11.5 ink). The text arrives in step
-/// with the voice, so the tail end is what's being said right now.
+/// with the voice, so the bubble works like subtitles: it shows the last
+/// few sentences, ending with what's being said right now (`tailWindow`),
+/// and stays small enough not to blanket the screen.
 struct PetAnswerBubbleView: View {
     let answerText: String
     let theme: WaitWhatTheme
 
     static let bubbleWidth: CGFloat = 180
+    /// About eight lines at this width.
+    private static let maximumShownCharacterCount = 230
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -141,13 +147,12 @@ struct PetAnswerBubbleView: View {
                 .font(.jetBrainsMono(9.5, weight: .medium))
                 .foregroundColor(theme.muted)
 
-            Text(answerText)
+            Text(PetOverlayAnswerText.tailWindow(of: answerText, maximumCharacterCount: Self.maximumShownCharacterCount))
                 .font(.system(size: 11.5))
                 .foregroundColor(theme.ink)
                 .lineSpacing(2)
-                .lineLimit(14)
-                // Long answers: keep the part being spoken in view.
-                .truncationMode(.head)
+                .lineLimit(10)
+                .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

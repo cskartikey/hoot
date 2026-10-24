@@ -14,6 +14,9 @@
 //      │                               ▼
 //      └── flyingHome / fadingOut ◀── lingering (3s, ⌃⌥ again = follow up)
 //
+//  The head rides the cursor only while ⌃⌥ is held; from thinking on it
+//  parks where the hold ended (see `parkedHeadCenterInGlobalSpace`).
+//
 //  A single 60Hz frame tick drives everything (cursor following, flights,
 //  polling `isSpeakingResponseAloud`, which isn't published), so the state
 //  machine never depends on the order Combine delivers changes in.
@@ -119,6 +122,14 @@ final class PetOverlayCoordinator: ObservableObject {
     private var previousCursorLocation = NSEvent.mouseLocation
     private var previousFrameDate = Date()
     private var lastFullscreenCheckDate = Date.distantPast
+
+    /// Where the head parked once the hold ended. hoot rides the cursor only
+    /// while listening; through thinking, talking and the follow-up window it
+    /// stays put, so the answer bubble doesn't chase the mouse across the
+    /// screen (or across a window switch). nil while following the cursor.
+    private var parkedHeadCenterInGlobalSpace: CGPoint?
+    /// A new hold from farther than this flies hoot back over to the cursor.
+    private let distanceFromCursorThatTriggersFlightBack: CGFloat = 48
 
     init(hootController: HootController) {
         self.hootController = hootController
@@ -245,10 +256,10 @@ final class PetOverlayCoordinator: ObservableObject {
         case .home:
             keepCornerHootInPlace()
         case .atCursor:
-            followCursor(cursorLocation: cursorLocation)
+            followCursorWhileListeningElsePark(cursorLocation: cursorLocation)
             startLingeringIfHootIsDone(now: now)
         case .lingering:
-            followCursor(cursorLocation: cursorLocation)
+            followCursorWhileListeningElsePark(cursorLocation: cursorLocation)
             if isHootBusyAnswering {
                 // A follow-up (or late audio) keeps hoot at the cursor.
                 hootQuietSinceDate = nil
@@ -335,6 +346,29 @@ final class PetOverlayCoordinator: ObservableObject {
         }
     }
 
+    /// Design 4a's cursor-riding is for the ask: the head follows while ⌃⌥
+    /// is held and parks where it is the moment the hold ends.
+    private func followCursorWhileListeningElsePark(cursorLocation: CGPoint) {
+        if hootController.voiceState == .listening {
+            parkedHeadCenterInGlobalSpace = nil
+            followCursor(cursorLocation: cursorLocation)
+        } else if parkedHeadCenterInGlobalSpace == nil {
+            parkedHeadCenterInGlobalSpace = petCenterInGlobalSpace
+        }
+    }
+
+    /// A new hold while parked: start following again, flying over first if
+    /// the cursor has wandered off so the head never teleports.
+    private func leaveParkingSpotForCursor(cursorLocation: CGPoint) {
+        guard parkedHeadCenterInGlobalSpace != nil else { return }
+        parkedHeadCenterInGlobalSpace = nil
+        let cursorHeadSpot = headCenterBesideCursor(cursorLocation: cursorLocation)
+        let distanceToCursorHeadSpot = hypot(cursorHeadSpot.x - petCenterInGlobalSpace.x, cursorHeadSpot.y - petCenterInGlobalSpace.y)
+        if distanceToCursorHeadSpot > distanceFromCursorThatTriggersFlightBack {
+            flyToCursor()
+        }
+    }
+
     /// The Dock or the display arrangement can change while hoot dozes.
     private func keepCornerHootInPlace() {
         guard activeFlight == nil else { return }
@@ -353,15 +387,23 @@ final class PetOverlayCoordinator: ObservableObject {
         case .lingering:
             hootQuietSinceDate = nil
             phase = .atCursor
+            if isNewRecording {
+                leaveParkingSpotForCursor(cursorLocation: cursorLocation)
+            }
+        case .atCursor:
+            if isNewRecording {
+                leaveParkingSpotForCursor(cursorLocation: cursorLocation)
+            }
         case .flyingHome, .fadingOut:
             // Asked again on the way out: turn around.
             flyToCursor()
         case .flyingToTarget, .pointingAtTarget:
             // A new question while pointing: come back to the cursor now.
             if isNewRecording {
+                parkedHeadCenterInGlobalSpace = nil
                 flyBackToCursorAfterPointing()
             }
-        case .flyingToCursor, .atCursor, .flyingBackToCursor:
+        case .flyingToCursor, .flyingBackToCursor:
             break
         }
     }
@@ -370,6 +412,7 @@ final class PetOverlayCoordinator: ObservableObject {
     /// and zips over; otherwise the head pops in right at the cursor.
     private func startCursorSession(cursorLocation: CGPoint) {
         hootQuietSinceDate = nil
+        parkedHeadCenterInGlobalSpace = nil
         isFullBodyAwakeAfterLanding = false
 
         if isCornerHootAllowed {
@@ -399,6 +442,7 @@ final class PetOverlayCoordinator: ObservableObject {
 
     private func flyToCursor() {
         hootQuietSinceDate = nil
+        parkedHeadCenterInGlobalSpace = nil
         isPetDrawnAsFullBody = false
         petGrowScale = 1
         if petSessionOpacity < 1 {
@@ -446,6 +490,7 @@ final class PetOverlayCoordinator: ObservableObject {
 
     private func landInTheCorner() {
         phase = .home
+        parkedHeadCenterInGlobalSpace = nil
         isPetDrawnAsFullBody = true
         // The 24pt head is half the 48pt body, so grow from 0.5.
         petGrowScale = 0.5
@@ -464,6 +509,7 @@ final class PetOverlayCoordinator: ObservableObject {
     private func returnHomeImmediately() {
         changeWithoutAnimation {
             activeFlight = nil
+            parkedHeadCenterInGlobalSpace = nil
             phase = .home
             isPetDrawnAsFullBody = true
             petGrowScale = 1
@@ -605,14 +651,18 @@ final class PetOverlayCoordinator: ObservableObject {
         }
     }
 
+    /// Back to the parking spot the question was asked from (so the bubble
+    /// returns to where the learner was reading), or to the live cursor when
+    /// there is none, as after a new hold while pointing.
     private func flyBackToCursorAfterPointing() {
         isPointingRingShown = false
         animatePointingFrameOut()
         phase = .flyingBackToCursor
-        let cursorHeadSpot = headCenterBesideCursor(cursorLocation: NSEvent.mouseLocation)
-        let flightDistance = hypot(cursorHeadSpot.x - petCenterInGlobalSpace.x, cursorHeadSpot.y - petCenterInGlobalSpace.y)
+        let returnSpot = parkedHeadCenterInGlobalSpace ?? headCenterBesideCursor(cursorLocation: NSEvent.mouseLocation)
+        let returnDestination: PetFlightDestination = parkedHeadCenterInGlobalSpace.map { .fixedPoint($0) } ?? .headSpotBesideCursor
+        let flightDistance = hypot(returnSpot.x - petCenterInGlobalSpace.x, returnSpot.y - petCenterInGlobalSpace.y)
         let flightDuration = min(max(flightDistance / 1100, 0.3), 0.7)
-        startFlight(destination: .headSpotBesideCursor, durationInSeconds: flightDuration) { [weak self] in
+        startFlight(destination: returnDestination, durationInSeconds: flightDuration) { [weak self] in
             guard let self, self.phase == .flyingBackToCursor else { return }
             self.pointingTargetInGlobalSpace = nil
             self.hootQuietSinceDate = nil

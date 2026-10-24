@@ -204,7 +204,8 @@ struct PetOverlayScreenView: View {
                     .transition(.opacity)
             }
 
-            // Talking: the answer, following the cursor under the head.
+            // Talking: the answer under the head, kept off the pointing
+            // frame so it never covers the thing being explained.
             PetAnswerBubbleView(answerText: answerText, theme: theme)
                 .onGeometryChange(for: CGSize.self) { geometry in geometry.size } action: { newSize in
                     answerBubbleSize = newSize
@@ -212,10 +213,11 @@ struct PetOverlayScreenView: View {
                 .opacity(isShowingAnswerBubble ? 1 : 0)
                 .animation(.easeOut(duration: 0.2), value: isShowingAnswerBubble)
                 .position(
-                    PetOverlayPlacement.centerForBubbleBelowHead(
+                    PetOverlayPlacement.centerForBubbleNearHead(
                         headFrame: headFrame,
                         bubbleSize: answerBubbleSize,
-                        screenSize: screenSize
+                        screenSize: screenSize,
+                        avoiding: pointingFrameRectToKeepClear()
                     )
                 )
                 .animation(followAnimation, value: headFrame)
@@ -280,6 +282,26 @@ struct PetOverlayScreenView: View {
                     prefersRightSideOfHead: targetX < headFrame.midX
                 )
             )
+    }
+
+    /// The index-card frame's rect on this screen (depth edge and tab room
+    /// included) while hoot flies to or sits at a target, so the bubbles can
+    /// stay clear of what is being explained. nil when not pointing.
+    private func pointingFrameRectToKeepClear() -> CGRect? {
+        let phase = petOverlayCoordinator.phase
+        guard phase == .flyingToTarget || phase == .pointingAtTarget,
+              let pointingTargetInGlobalSpace = petOverlayCoordinator.pointingTargetInGlobalSpace else { return nil }
+        let frameSize = PetPointingFrameView.paddedFrameSize(
+            forElementSize: hootController.detectedElementBoxSize,
+            screenSize: screenFrame.size
+        )
+        let targetCenter = localPoint(fromGlobalPoint: pointingTargetInGlobalSpace)
+        return CGRect(
+            x: targetCenter.x - frameSize.width / 2,
+            y: targetCenter.y - frameSize.height / 2 - PetPointingFrameView.roomForTabAboveAndBelow,
+            width: frameSize.width + PetPointingFrameView.depthEdgeOutset,
+            height: frameSize.height + 2 * PetPointingFrameView.roomForTabAboveAndBelow
+        )
     }
 
     // MARK: - Coordinates

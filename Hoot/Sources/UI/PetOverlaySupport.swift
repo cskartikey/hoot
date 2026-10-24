@@ -49,6 +49,59 @@ enum PetOverlayAnswerText {
 
         return remainingText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// What a bubble shows of a long text: a window onto its END, so the
+    /// words being spoken (or dictated) right now are always in view. Whole
+    /// sentences are kept from the end while they fit `maximumCharacterCount`;
+    /// what was dropped before them is marked with a leading ellipsis.
+    ///
+    /// Why not `.truncationMode(.head)`: on multi-line Text, SwiftUI keeps the
+    /// FIRST lines and chops only the last one, so a long answer showed its
+    /// opening with a stray "…r if there's no text to return." at the bottom.
+    static func tailWindow(of text: String, maximumCharacterCount: Int) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedText.count > maximumCharacterCount else { return trimmedText }
+
+        // Take sentences from the end, newest first, while they fit. The last
+        // sentence is always taken, even when it alone is over budget.
+        var windowStartIndex = trimmedText.endIndex
+        for sentenceStartIndex in sentenceStartIndices(in: trimmedText).reversed() {
+            let characterCountFromHere = trimmedText.distance(from: sentenceStartIndex, to: trimmedText.endIndex)
+            let hasAtLeastOneSentence = windowStartIndex != trimmedText.endIndex
+            if hasAtLeastOneSentence && characterCountFromHere > maximumCharacterCount { break }
+            windowStartIndex = sentenceStartIndex
+            if characterCountFromHere >= maximumCharacterCount { break }
+        }
+        var windowText = String(trimmedText[windowStartIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A single sentence longer than the whole budget: cut it at a word.
+        if windowText.count > maximumCharacterCount {
+            let overflowCharacterCount = windowText.count - maximumCharacterCount
+            var cutIndex = windowText.index(windowText.startIndex, offsetBy: overflowCharacterCount)
+            if let nextWhitespaceIndex = windowText[cutIndex...].firstIndex(where: { $0.isWhitespace }) {
+                cutIndex = nextWhitespaceIndex
+            }
+            windowText = String(windowText[cutIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return "…" + windowText
+    }
+
+    /// The text's start, then the first character after every ". ", "! " or "? ".
+    private static func sentenceStartIndices(in text: String) -> [String.Index] {
+        var sentenceStartIndices = [text.startIndex]
+        var previousCharacter: Character?
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if let previousCharacter, ".!?".contains(previousCharacter), character.isWhitespace {
+                let nextIndex = text.index(after: index)
+                if nextIndex < text.endIndex { sentenceStartIndices.append(nextIndex) }
+            }
+            previousCharacter = character
+            index = text.index(after: index)
+        }
+        return sentenceStartIndices
+    }
 }
 
 // MARK: - Coordinates
@@ -107,6 +160,59 @@ enum PetOverlayPlacement {
         )
 
         return CGPoint(x: bubbleLeftEdge + bubbleSize.width / 2, y: bubbleTopEdge + bubbleSize.height / 2)
+    }
+
+    /// Center for a bubble beside the head that stays clear of `rectToAvoid`
+    /// (the index-card frame around what hoot points at: the bubble must not
+    /// cover the very thing being explained). Tries under the head, above
+    /// it, then the side away from the rect, and takes the first spot that
+    /// fits on screen without touching the rect; failing that, the spot that
+    /// covers the least of it. Without a rect this is `centerForBubbleBelowHead`.
+    static func centerForBubbleNearHead(
+        headFrame: CGRect,
+        bubbleSize: CGSize,
+        screenSize: CGSize,
+        avoiding rectToAvoid: CGRect?
+    ) -> CGPoint {
+        let fallbackCenter = centerForBubbleBelowHead(headFrame: headFrame, bubbleSize: bubbleSize, screenSize: screenSize)
+        guard let rectToAvoid, bubbleSize.width > 0, bubbleSize.height > 0 else { return fallbackCenter }
+
+        let gapFromHead: CGFloat = 8
+        let belowHead = CGPoint(x: headFrame.minX - 2, y: headFrame.maxY + gapFromHead)
+        let aboveHead = CGPoint(x: headFrame.minX - 2, y: headFrame.minY - gapFromHead - bubbleSize.height)
+        let leftOfHead = CGPoint(x: headFrame.minX - gapFromHead - bubbleSize.width, y: headFrame.minY - 2)
+        let rightOfHead = CGPoint(x: headFrame.maxX + gapFromHead, y: headFrame.minY - 2)
+        let isRectRightOfHead = rectToAvoid.midX > headFrame.midX
+        let candidateTopLeftCorners = isRectRightOfHead
+            ? [belowHead, aboveHead, leftOfHead, rightOfHead]
+            : [belowHead, aboveHead, rightOfHead, leftOfHead]
+
+        var bestCenter = fallbackCenter
+        var smallestOverlapArea = CGFloat.greatestFiniteMagnitude
+        for candidateTopLeftCorner in candidateTopLeftCorners {
+            let bubbleRect = CGRect(
+                x: clamp(
+                    candidateTopLeftCorner.x,
+                    lowerBound: screenEdgeMargin,
+                    upperBound: screenSize.width - screenEdgeMargin - bubbleSize.width
+                ),
+                y: clamp(
+                    candidateTopLeftCorner.y,
+                    lowerBound: screenEdgeMargin,
+                    upperBound: screenSize.height - screenEdgeMargin - bubbleSize.height
+                ),
+                width: bubbleSize.width,
+                height: bubbleSize.height
+            )
+            let overlap = bubbleRect.intersection(rectToAvoid)
+            let overlapArea = overlap.isNull ? 0 : overlap.width * overlap.height
+            if overlapArea < smallestOverlapArea {
+                smallestOverlapArea = overlapArea
+                bestCenter = CGPoint(x: bubbleRect.midX, y: bubbleRect.midY)
+            }
+            if overlapArea == 0 { break }
+        }
+        return bestCenter
     }
 
     /// Center for a small piece beside the head (bars, chip, countdown). Uses
