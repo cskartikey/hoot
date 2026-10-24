@@ -244,6 +244,31 @@ final class MemoryStore: ObservableObject {
         return newEntry.id
     }
 
+    /// Demo mode can be switched on after reviews were scheduled on the real
+    /// (day-long) ladder. Pull any review that's further out than its demo
+    /// interval in to "now + demo interval", so turning demo mode on works
+    /// for memories you already have. Returns how many were moved.
+    @discardableResult
+    func pullReviewsIntoDemoWindowIfNeeded(now: Date = Date()) -> Int {
+        guard SpacedReviewSchedule.isDemoModeEnabled else { return 0 }
+        var movedCount = 0
+        var updatedConceptReviews = conceptReviews
+        for reviewIndex in updatedConceptReviews.indices {
+            guard let nextReviewAt = updatedConceptReviews[reviewIndex].nextReviewAt,
+                  let demoInterval = SpacedReviewSchedule.interval(forStage: updatedConceptReviews[reviewIndex].reviewStage) else { continue }
+            let latestDemoReviewDate = now.addingTimeInterval(demoInterval)
+            if nextReviewAt > latestDemoReviewDate {
+                updatedConceptReviews[reviewIndex].nextReviewAt = latestDemoReviewDate
+                movedCount += 1
+            }
+        }
+        guard movedCount > 0 else { return 0 }
+        conceptReviews = updatedConceptReviews
+        saveToDisk()
+        print("🧠 demo mode: pulled \(movedCount) review(s) into the demo window")
+        return movedCount
+    }
+
     /// Asking about a concept again means it didn't stick: count it, and
     /// restart its review ladder from the bottom.
     private func bumpConceptReviewForNewQuestion(concept: String, askedAt: Date) {

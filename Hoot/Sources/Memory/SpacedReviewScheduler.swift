@@ -72,6 +72,7 @@ final class SpacedReviewScheduler {
     }
 
     private(set) var currentlyOfferedReview: OfferedReview?
+    private var lastLoggedBlockedReason: String?
 
     private weak var hootController: HootController?
     private var dueReviewCheckTimer: Timer?
@@ -102,6 +103,7 @@ final class SpacedReviewScheduler {
     // MARK: Checking
 
     private func offerMostOverdueReviewIfPossible() {
+        MemoryStore.shared.pullReviewsIntoDemoWindowIfNeeded()
         guard let hootController,
               hootController.voiceState == .idle,
               !hootController.isAnswerPipelineRunning,
@@ -151,6 +153,13 @@ final class SpacedReviewScheduler {
         if NudgeCenter.shared.postNudgeIfAllowed(reviewNudge) {
             currentlyOfferedReview = OfferedReview(concept: concept, question: question, nudgeId: reviewNudge.id)
             print("🧠 review nudge for \"\(concept)\": \(question)")
+        } else {
+            // Say why once per reason, so "why don't I see a nudge?" is answerable from the console.
+            let blockedReason = NudgeCenter.shared.reasonNudgeCannotShowNow() ?? "not allowed right now"
+            if blockedReason != lastLoggedBlockedReason {
+                lastLoggedBlockedReason = blockedReason
+                print("🧠 review for \"\(concept)\" is due but waiting: \(blockedReason)")
+            }
         }
     }
 
