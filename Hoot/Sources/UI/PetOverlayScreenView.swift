@@ -71,6 +71,16 @@ struct PetOverlayScreenView: View {
                 theme: theme
             )
 
+            // MARK: - Napkin sketch
+            // The tutor's diagram on its paper card, above the marks and
+            // below hoot; it reveals in step with the spoken text.
+            PetNapkinSketchLayerView(
+                screenFrame: screenFrame,
+                napkinSketch: hootController.napkinSketch,
+                spokenTextRevealedSoFar: hootController.streamingResponseText,
+                theme: theme
+            )
+
             if isPetNearThisScreen {
                 // The fade animation sits above `.position` so showing or
                 // hiding the corner hoot never animates where it is.

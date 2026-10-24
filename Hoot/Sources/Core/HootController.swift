@@ -76,6 +76,15 @@ final class HootController: ObservableObject {
     /// target and cleared with it, so they never outlive the frame.
     @Published private(set) var screenAnnotations: [HootResolvedAnnotation] = []
 
+    // MARK: - Napkin sketch
+    /// The tutor's [NAPKIN:] diagram, drawn on the screen while hoot talks
+    /// (global coordinates, grouped by spoken sentence). Unlike the marks it
+    /// outlives pointing: it stays until the next hold or 45 seconds pass,
+    /// so the learner can keep looking at it after hoot has flown off.
+    @Published private(set) var napkinSketch: HootNapkinSketchState?
+    private var napkinSketchExpiryTask: Task<Void, Never>?
+    private static let secondsANapkinSketchStaysUp: TimeInterval = 45
+
     @Published var latestExplainerVideoRequest: ExplainerVideoRequest?
     /// The memory saved for the most recent question that asked for an
     /// explainer video, so the finished video can be attached to it. Nil when
@@ -340,6 +349,45 @@ final class HootController: ObservableObject {
         )
     }
 
+    // MARK: - Napkin sketch
+
+    /// Takes the napkin off the screen (the overlay fades it out).
+    func clearNapkinSketch() {
+        napkinSketchExpiryTask?.cancel()
+        napkinSketchExpiryTask = nil
+        if napkinSketch != nil { napkinSketch = nil }
+    }
+
+    /// Parses the reply's [NAPKIN:] block, places the paper beside what
+    /// hoot is pointing at (or beside the cursor) and publishes it; nothing
+    /// happens when the reply has no block. The napkin clears itself after
+    /// a while so it can't be left behind on the screen.
+    private func publishNapkinSketch(
+        fromResponseText responseText: String,
+        spokenText: String,
+        capturedScreens: [CapturedScreen],
+        pointingLocation: HootResolvedPointingLocation?
+    ) {
+        napkinSketchExpiryTask?.cancel()
+        napkinSketchExpiryTask = nil
+        guard let napkinSketchState = HootNapkinLayout.napkinSketchState(
+            fromResponseText: responseText,
+            spokenText: spokenText,
+            capturedScreens: capturedScreens,
+            pointingLocation: pointingLocation
+        ) else {
+            if napkinSketch != nil { napkinSketch = nil }
+            return
+        }
+        print("🧻 Napkin sketch: \(napkinSketchState.strokes.count) stroke(s) over \(napkinSketchState.sentenceCount) sentence(s)")
+        napkinSketch = napkinSketchState
+        napkinSketchExpiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.secondsANapkinSketchStaysUp * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.napkinSketch == napkinSketchState else { return }
+            self.napkinSketch = nil
+        }
+    }
+
     // MARK: - Voice input wiring
 
     private func wireVoiceInput() {
@@ -405,6 +453,7 @@ final class HootController: ObservableObject {
         // A new question interrupts whatever hoot was doing.
         cancelCurrentAnswerAndSpeech()
         clearDetectedElementLocation()
+        clearNapkinSketch() // MARK: - Napkin sketch (a new hold wipes the napkin)
         streamingResponseText = ""
 
         // Pause YouTube right away so the lecture doesn't keep talking over
@@ -680,6 +729,18 @@ final class HootController: ObservableObject {
                 }
                 detectedElementScreenLocation = resolvedPointingLocation.globalLocation
             }
+
+            // MARK: - Napkin sketch
+            // Drawn on screen right away, grouped by spoken sentence; the
+            // pointing target is re-read here so the paper can sit beside
+            // the frame without reaching into the block above.
+            publishNapkinSketch(
+                fromResponseText: fullResponseText,
+                spokenText: spokenText,
+                capturedScreens: capturedScreens,
+                pointingLocation: HootResponseTags.parsePointingTarget(from: responseTextWithoutPictureTags)
+                    .flatMap { HootResponseTags.resolvePointingTarget($0, capturedScreens: capturedScreens) }
+            )
 
             // Show it under "recent" in the menu bar panel. The source is the
             // YouTube video's title when the question paused one, else the app.
