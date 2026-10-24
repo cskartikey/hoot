@@ -264,19 +264,15 @@ private struct ExplainerProgressSegment: View {
     }
 }
 
-/// The centered status pill on the placeholder: 8pt accent dot (gently
-/// pulsing so the card feels alive) + the current stage.
+/// The centered status pill on the placeholder: an 8pt pixel spinner
+/// (so the card feels alive) + the current stage.
 private struct ExplainerStagePill: View {
     let stagePillText: String
     let theme: WaitWhatTheme
-    @State private var isDotDimmed = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(theme.accent)
-                .frame(width: 8, height: 8)
-                .opacity(isDotDimmed ? 0.45 : 1)
+            ExplainerPixelSpinnerView(pixelColor: theme.accent)
             Text(stagePillText)
                 .font(.jetBrainsMono(11.5, weight: .medium))
                 .foregroundColor(theme.ink)
@@ -292,10 +288,50 @@ private struct ExplainerStagePill: View {
                 .shadow(color: theme.foreground(opacity: 0.08), radius: 4, x: 0, y: 2)
         )
         .animation(.easeInOut(duration: 0.2), value: stagePillText)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                isDotDimmed = true
+    }
+}
+
+/// A 3×3 ring of 2pt pixels (8pt overall, the size of the old dot) with one
+/// bright pixel chasing round it and a short fading tail, stepping every
+/// 100ms. Driven by a TimelineView rather than `repeatForever`, which
+/// stuttered whenever the stage text swapped out from under it.
+private struct ExplainerPixelSpinnerView: View {
+    let pixelColor: Color
+
+    private static let pixelSide: CGFloat = 2
+    private static let pixelGap: CGFloat = 1
+    private static let stepDurationInSeconds: TimeInterval = 0.1
+    /// Grid positions (column, row) around the ring, clockwise from top-left.
+    private static let ringPositions: [(column: Int, row: Int)] = [
+        (0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1)
+    ]
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: Self.stepDurationInSeconds)) { timelineContext in
+            let headStep = Int(timelineContext.date.timeIntervalSinceReferenceDate / Self.stepDurationInSeconds)
+                % Self.ringPositions.count
+            Canvas { graphicsContext, _ in
+                for (ringIndex, ringPosition) in Self.ringPositions.enumerated() {
+                    // 0 = the head, 1 and 2 = the fading tail behind it.
+                    let stepsBehindHead = (headStep - ringIndex + Self.ringPositions.count) % Self.ringPositions.count
+                    let pixelOpacity: Double
+                    switch stepsBehindHead {
+                    case 0: pixelOpacity = 1
+                    case 1: pixelOpacity = 0.55
+                    case 2: pixelOpacity = 0.25
+                    default: pixelOpacity = 0.1
+                    }
+                    let pitch = Self.pixelSide + Self.pixelGap
+                    let pixelRect = CGRect(
+                        x: CGFloat(ringPosition.column) * pitch,
+                        y: CGFloat(ringPosition.row) * pitch,
+                        width: Self.pixelSide,
+                        height: Self.pixelSide
+                    )
+                    graphicsContext.fill(Path(pixelRect), with: .color(pixelColor.opacity(pixelOpacity)))
+                }
             }
+            .frame(width: 3 * Self.pixelSide + 2 * Self.pixelGap, height: 3 * Self.pixelSide + 2 * Self.pixelGap)
         }
     }
 }
