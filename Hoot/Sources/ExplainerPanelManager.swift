@@ -132,9 +132,25 @@ final class ExplainerPanelManager: ObservableObject {
     private var mostRecentExplainerVideoRequest: HootController.ExplainerVideoRequest?
     private var themeAppearanceCancellable: AnyCancellable?
 
+    /// True once the user closed the panel while the active studio job was
+    /// still rendering (or switched to a saved video over it): the job keeps
+    /// going without touching the panel, and its finished video is offered
+    /// through `onVideoReadyWhileClosed` instead of reopening the panel.
+    private var isActiveJobRunningInBackground = false
+    /// The active job's best title so far (the question, then the studio's
+    /// script title), kept apart from the published UI text so a job running
+    /// in the background never overwrites what the panel is showing.
+    private var activeJobVideoTitle = ""
+
     private static let escapeKeyCode: UInt16 = 53
 
+    /// The one manager the app delegate creates, so views that only get the
+    /// HootController (the menu bar panel) can reopen saved videos. Weak so
+    /// it never keeps a discarded manager alive.
+    private(set) static weak var shared: ExplainerPanelManager?
+
     init() {
+        Self.shared = self
         // Keep the panel's NSAppearance in step with the theme so the
         // `.ultraThinMaterial` behind the glass tint matches light/dark.
         // `$theme` fires before the store's value changes, so use the new value.
@@ -150,8 +166,12 @@ final class ExplainerPanelManager: ObservableObject {
     /// job. Any job already in flight is cancelled so only the newest
     /// question's video is shown.
     func showAndGenerate(request explainerVideoRequest: HootController.ExplainerVideoRequest) {
+        // A new request always replaces the previous job, even one that was
+        // left rendering in the background.
         cancelActiveJobAndPlayback()
         mostRecentExplainerVideoRequest = explainerVideoRequest
+        isActiveJobRunningInBackground = false
+        activeJobVideoTitle = explainerVideoRequest.question
 
         currentQuestionText = explainerVideoRequest.question
         studioScriptTitleText = nil
@@ -200,12 +220,57 @@ final class ExplainerPanelManager: ObservableObject {
     /// (url, title), so a corner nudge can offer it.
     var onVideoReadyWhileClosed: ((String, String) -> Void)?
 
-    /// Opens the panel straight into playback of a saved video.
-    func playSavedVideo(url: String, title: String) {}
+    /// Opens the panel straight into playback of a saved video (from the
+    /// menu panel's recent list or a "video ready" nudge). Saved videos have
+    /// no captions, so the caption line shows the title instead. A job that
+    /// is still rendering keeps going in the background and is offered
+    /// through `onVideoReadyWhileClosed` when it finishes.
+    func playSavedVideo(url savedVideoURLString: String, title savedVideoTitle: String) {
+        moveRenderingJobToBackgroundIfAny()
+        stopPlayback()
+        stopLargeWindowPlayback()
 
+        currentQuestionText = savedVideoTitle
+        studioScriptTitleText = savedVideoTitle
+        currentVideoTitleForLargeWindow = savedVideoTitle.lowercased()
+        hasVideoFinishedPlaying = false
+        isCurrentVideoBookmarked = false
+
+        let savedFinishedVideo = StudioFinishedVideo(url: savedVideoURLString, duration: 0, captions: [], fallback: false)
+        startPlayback(finishedVideo: savedFinishedVideo)
+        if case .playingVideo = explainerPanelPhase {
+            currentCaptionText = savedVideoTitle
+            loadDurationOfCurrentVideo()
+        }
+
+        showPanelAtBottomRightOfMouseScreen()
+        installEscapeKeyMonitors()
+    }
+
+    /// The saved video's length isn't stored, so read it from the file once
+    /// the asset loads (the scrubber and the time label need it).
+    private func loadDurationOfCurrentVideo() {
+        guard let currentFinishedVideoURL else { return }
+        let videoURLWhenAsked = currentFinishedVideoURL
+        Task { [weak self] in
+            let loadedDuration = try? await AVURLAsset(url: videoURLWhenAsked).load(.duration)
+            guard let self, let loadedDuration, loadedDuration.seconds.isFinite,
+                  self.currentFinishedVideoURL == videoURLWhenAsked else { return }
+            self.finishedVideoDurationInSeconds = loadedDuration.seconds
+        }
+    }
+
+    /// Closing (×, Esc) while the video is still rendering hides the panel
+    /// but lets the studio finish; the finished video is then offered with a
+    /// nudge instead of popping the panel back open.
     func close() {
         onExplainerPanelClosed?()
-        cancelActiveJobAndPlayback()
+        moveRenderingJobToBackgroundIfAny()
+        // Not cancelActiveJobAndPlayback: that would also cancel the job we
+        // just moved to the background.
+        activeStudioJobTask?.cancel()
+        activeStudioJobTask = nil
+        stopPlayback()
         // Closing the panel ends the video everywhere, big window included.
         stopLargeWindowPlayback()
         largeExplainerVideoWindow?.orderOut(nil)
@@ -357,6 +422,11 @@ final class ExplainerPanelManager: ObservableObject {
         } catch {
             if Task.isCancelled { return }
             print("⚠️ Studio job failed: \(error)")
+            if isActiveJobRunningInBackground {
+                // Nobody is looking; don't pop an error panel up later.
+                finishBackgroundJob()
+                return
+            }
             explainerPanelPhase = .failed(friendlyErrorMessage: Self.friendlyErrorMessage(for: error))
         }
     }
@@ -364,19 +434,53 @@ final class ExplainerPanelManager: ObservableObject {
     private func handleStudioJobEvent(_ studioJobEvent: StudioJobEvent) {
         switch studioJobEvent {
         case .stage(let stageUpdate):
+            guard !isActiveJobRunningInBackground else { return }
             handleStudioStageUpdate(stageUpdate)
         case .script(let studioScript):
             if let studioScriptTitle = studioScript.title, !studioScriptTitle.isEmpty {
+                activeJobVideoTitle = studioScriptTitle
+                guard !isActiveJobRunningInBackground else { return }
                 currentVideoTitleForLargeWindow = studioScriptTitle.lowercased()
                 studioScriptTitleText = studioScriptTitle
             }
         case .done(let finishedVideo):
+            onFinishedVideoReady?(finishedVideo.url)
+            if isActiveJobRunningInBackground {
+                let finishedVideoTitle = activeJobVideoTitle
+                finishBackgroundJob()
+                onVideoReadyWhileClosed?(finishedVideo.url, finishedVideoTitle)
+                return
+            }
+            activeStudioJobTask = nil
             startPlayback(finishedVideo: finishedVideo)
         case .error(let studioErrorMessage):
             print("⚠️ Studio reported error: \(studioErrorMessage)")
+            if isActiveJobRunningInBackground {
+                finishBackgroundJob()
+                return
+            }
             explainerPanelPhase = .failed(friendlyErrorMessage: "i couldn't finish that animation this time. ask me again and i'll take another shot.")
         }
     }
+
+    /// If a job is still rendering, detach it from the panel so it keeps
+    /// running while the panel closes or shows something else.
+    private func moveRenderingJobToBackgroundIfAny() {
+        guard activeStudioJobTask != nil, explainerPanelPhase == .generatingVideo else { return }
+        isActiveJobRunningInBackground = true
+        backgroundStudioJobTask = activeStudioJobTask
+        activeStudioJobTask = nil
+    }
+
+    private func finishBackgroundJob() {
+        isActiveJobRunningInBackground = false
+        backgroundStudioJobTask = nil
+    }
+
+    /// The job left running after the panel closed. Kept separately from
+    /// `activeStudioJobTask` so closing/stopping playback leaves it alone;
+    /// only a new request cancels it.
+    private var backgroundStudioJobTask: Task<Void, Never>?
 
     /// Maps the studio's stage names onto the four progress segments:
     /// `script` → script, `voice` → voice, `render` (any attempt) → animate.
@@ -473,10 +577,18 @@ final class ExplainerPanelManager: ObservableObject {
         }
     }
 
+    /// Cancels every studio job (active or in the background) and stops
+    /// playback. Used when a new request replaces whatever came before.
     private func cancelActiveJobAndPlayback() {
         activeStudioJobTask?.cancel()
         activeStudioJobTask = nil
+        backgroundStudioJobTask?.cancel()
+        backgroundStudioJobTask = nil
+        isActiveJobRunningInBackground = false
+        stopPlayback()
+    }
 
+    private func stopPlayback() {
         if let explainerVideoPlayer {
             explainerVideoPlayer.pause()
             if let playbackTimeObserverToken {

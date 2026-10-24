@@ -3,7 +3,8 @@
 //  Hoot
 //
 //  Screen 3 of the crisp design, pushed from home: model, voice + speed,
-//  buddy (+ "always visible"), appearance, and the permissions summary.
+//  buddy (+ "always visible"), appearance, memory (count, nudges, review
+//  demo mode, forget everything), and the permissions summary.
 //  Picking a buddy or an appearance re-themes the whole app at once,
 //  because everything reads WaitWhatThemeStore.
 //
@@ -15,11 +16,19 @@ struct MenuPanelSettingsView: View {
     @ObservedObject var permissionCenter: PermissionCenter
     @ObservedObject private var themeStore = WaitWhatThemeStore.shared
     @ObservedObject private var voiceSettingsStore = WaitWhatVoiceSettingsStore.shared
+    @ObservedObject private var memoryStore = MemoryStore.shared
+    @ObservedObject private var nudgeCenter = NudgeCenter.shared
+    /// Read by the spaced-review ladder: minutes instead of days, so a
+    /// review comes due during a demo.
+    @AppStorage("hootReviewDemoMode") private var isReviewDemoModeOn = false
     let theme: WaitWhatTheme
     let onGoBack: () -> Void
 
     @State private var isVoiceListExpanded = false
     @State private var isPermissionListExpanded = false
+    /// "forget everything" needs a second tap; this is true between the two.
+    @State private var isForgetEverythingAwaitingConfirmation = false
+    @State private var forgetConfirmationResetWorkItem: DispatchWorkItem?
 
     private static let sonnetModelIdentifier = "claude-sonnet-5-5"
     private static let opusModelIdentifier = "claude-opus-5-5"
@@ -33,6 +42,7 @@ struct MenuPanelSettingsView: View {
             voiceSection
             buddySection
             appearanceSection
+            memorySection
             permissionsSummarySection
         }
         .padding(14)
@@ -231,6 +241,101 @@ struct MenuPanelSettingsView: View {
                     themeStore.appearanceSetting = WaitWhatAppearanceSetting.allCases[selectedOptionIndex]
                 }
             )
+        }
+    }
+
+    // MARK: - Memory
+
+    private var memorySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            MenuPanelSectionLabel(labelText: "memory", theme: theme)
+
+            Text(rememberedThingsText)
+                .font(.system(size: 13))
+                .foregroundColor(theme.ink)
+
+            memorySwitchRow(
+                titleText: "nudges",
+                isOn: nudgeCenter.areNudgesEnabled,
+                helpText: "let \(petName) wave from the corner when a review is due or a video is ready",
+                onToggle: { isNowOn in nudgeCenter.areNudgesEnabled = isNowOn }
+            )
+
+            memorySwitchRow(
+                titleText: "review demo mode",
+                isOn: isReviewDemoModeOn,
+                helpText: "reviews come due after minutes instead of days",
+                onToggle: { isNowOn in isReviewDemoModeOn = isNowOn }
+            )
+
+            forgetEverythingButton
+                .padding(.top, 2)
+        }
+    }
+
+    private var rememberedThingsText: String {
+        switch memoryStore.entries.count {
+        case 0: return "\(petName) doesn't remember anything yet"
+        case 1: return "\(petName) remembers 1 thing"
+        case let rememberedCount: return "\(petName) remembers \(rememberedCount) things"
+        }
+    }
+
+    private func memorySwitchRow(titleText: String, isOn: Bool, helpText: String, onToggle: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Text(titleText)
+                .font(.system(size: 13))
+                .foregroundColor(theme.ink)
+            Spacer()
+            MenuPanelSwitch(isOn: isOn, theme: theme, onToggle: onToggle)
+                .help(helpText)
+        }
+    }
+
+    /// Destructive, so it takes two taps: the first turns the row into an
+    /// accent "tap again" confirmation that times out after 4 seconds.
+    private var forgetEverythingButton: some View {
+        MenuPanelHoverButton(theme: theme, cornerRadius: 9, action: handleForgetEverythingTap) {
+            HStack(spacing: 6) {
+                Image(systemName: isForgetEverythingAwaitingConfirmation ? "exclamationmark.triangle" : "trash")
+                    .font(.system(size: 12, weight: .medium))
+                Text(isForgetEverythingAwaitingConfirmation ? "tap again to forget it all" : "forget everything")
+                    .font(.jetBrainsMono(11.5, weight: .semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(isForgetEverythingAwaitingConfirmation ? theme.onAccent : theme.accent)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isForgetEverythingAwaitingConfirmation ? theme.accent : theme.accent.opacity(0.10))
+            )
+        }
+        .help("deletes every saved question, answer and review on this mac")
+    }
+
+    private func handleForgetEverythingTap() {
+        forgetConfirmationResetWorkItem?.cancel()
+        forgetConfirmationResetWorkItem = nil
+
+        guard isForgetEverythingAwaitingConfirmation else {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isForgetEverythingAwaitingConfirmation = true
+            }
+            let resetWorkItem = DispatchWorkItem {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isForgetEverythingAwaitingConfirmation = false
+                }
+            }
+            forgetConfirmationResetWorkItem = resetWorkItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: resetWorkItem)
+            return
+        }
+
+        MemoryStore.shared.forgetEverything()
+        RecentQuestionsStore.shared.clearAllRecentQuestions()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isForgetEverythingAwaitingConfirmation = false
         }
     }
 

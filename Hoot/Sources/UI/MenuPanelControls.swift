@@ -235,7 +235,9 @@ struct MenuPanelSwitch: View {
 // MARK: - Recent question row
 
 /// SF Symbol (17pt) · [title SF 13 ink, meta JBM 10.5 muted]. The most recent
-/// row is tinted `accent@0.12`; the others get a hover fill.
+/// row is tinted `accent@0.12`; the others get a hover fill. Rows with an
+/// `onSelect` are buttons (reopen the saved video or answer); rows without
+/// one (the empty state, old questions from before memory) only hover.
 struct MenuPanelRecentQuestionRow: View {
     let symbolName: String
     let symbolColor: Color
@@ -243,12 +245,24 @@ struct MenuPanelRecentQuestionRow: View {
     let metaText: String
     let isMostRecent: Bool
     let theme: WaitWhatTheme
+    var onSelect: (() -> Void)? = nil
 
     @State private var isHovered = false
 
     var body: some View {
-        // Reopening a saved answer isn't built yet, so the rows aren't buttons
-        // (no pointer cursor); they only acknowledge the hover.
+        if let onSelect {
+            Button(action: onSelect) {
+                rowContent
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 10) {
             Image(systemName: symbolName)
                 .font(.system(size: 15))
@@ -282,7 +296,7 @@ struct MenuPanelRecentQuestionRow: View {
 
     private var rowBackgroundColor: Color {
         if isMostRecent {
-            return theme.accent.opacity(0.12)
+            return theme.accent.opacity(isHovered && onSelect != nil ? 0.18 : 0.12)
         }
         return isHovered ? theme.foreground(opacity: 0.06) : Color.clear
     }

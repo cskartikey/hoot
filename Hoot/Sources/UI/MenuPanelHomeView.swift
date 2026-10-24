@@ -3,8 +3,14 @@
 //  Hoot
 //
 //  Screen 2 of the crisp design: the everyday menu bar panel. Pet header
-//  ("hoot", "<pet> is ready", ⌃⌥ keycaps), the recent questions, and the
-//  settings… / quit rows.
+//  ("hoot", "<pet> is ready", ⌃⌥ keycaps), the recent questions, the
+//  "<pet> remembers" concept chips, and the settings… / quit rows.
+//
+//  Recent rows come from MemoryStore (falling back to the older
+//  RecentQuestionsStore until the first memory is saved). A row with a
+//  saved explainer video reopens it in the explainer panel; one without
+//  opens the saved answer as a small card in place of the list. Tapping a
+//  chip filters the list to that concept; tapping it again clears it.
 //
 
 import AppKit
@@ -13,6 +19,7 @@ import SwiftUI
 struct MenuPanelHomeView: View {
     @ObservedObject var hootController: HootController
     @ObservedObject private var recentQuestionsStore = RecentQuestionsStore.shared
+    @ObservedObject private var memoryStore = MemoryStore.shared
     let theme: WaitWhatTheme
     let petName: String
     /// True for a moment right after onboarding finishes, so the pet waves.
@@ -20,16 +27,39 @@ struct MenuPanelHomeView: View {
     let onOpenSettings: () -> Void
 
     private let maximumRecentQuestionRowCount = 4
+    private let maximumMemoryChipCount = 4
+
+    /// The concept chip the recent list is filtered by, if any.
+    @State private var selectedConceptFilter: String?
+    /// The saved answer shown as a card in place of the recent rows.
+    @State private var memoryEntryShownInAnswerCard: MemoryEntry?
+
+    private let memoryAnimation = Animation.easeInOut(duration: 0.2)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             MenuPanelHairline(theme: theme)
-            MenuPanelSectionLabel(labelText: "recent", theme: theme)
+            MenuPanelSectionLabel(labelText: recentSectionLabelText, theme: theme)
                 .padding(.top, 10)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
-            recentQuestionRows
+            if let memoryEntryShownInAnswerCard {
+                MenuPanelSavedAnswerCard(
+                    memoryEntry: memoryEntryShownInAnswerCard,
+                    petName: petName,
+                    theme: theme,
+                    onClose: {
+                        withAnimation(memoryAnimation) { self.memoryEntryShownInAnswerCard = nil }
+                    }
+                )
+                .padding(.horizontal, 2)
+                .transition(.opacity)
+            } else {
+                recentQuestionRows
+                    .transition(.opacity)
+            }
+            memoryChipsSection
             MenuPanelHairline(theme: theme)
                 .padding(.top, 6)
             menuRows
@@ -88,8 +118,60 @@ struct MenuPanelHomeView: View {
 
     // MARK: - Recent questions
 
+    /// "recent", or "recent · determinants" while a chip filters the list.
+    private var recentSectionLabelText: String {
+        guard let activeConceptFilter else { return "recent" }
+        return "recent · \(activeConceptFilter)"
+    }
+
+    /// The selected chip's concept, but only while that chip still exists
+    /// (after "forget everything" the filter quietly drops away).
+    private var activeConceptFilter: String? {
+        guard let selectedConceptFilter,
+              displayedConceptReviews.contains(where: { $0.concept == selectedConceptFilter }) else { return nil }
+        return selectedConceptFilter
+    }
+
+    private var displayedMemoryEntries: [MemoryEntry] {
+        let matchingMemoryEntries: [MemoryEntry]
+        if let activeConceptFilter {
+            matchingMemoryEntries = memoryStore.entries.filter { $0.concept == activeConceptFilter }
+        } else {
+            matchingMemoryEntries = memoryStore.entries
+        }
+        return Array(matchingMemoryEntries.prefix(maximumRecentQuestionRowCount))
+    }
+
     @ViewBuilder
     private var recentQuestionRows: some View {
+        if !memoryStore.entries.isEmpty {
+            memoryEntryRows
+        } else {
+            legacyRecentQuestionRows
+        }
+    }
+
+    private var memoryEntryRows: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(displayedMemoryEntries.enumerated()), id: \.element.id) { entryIndex, memoryEntry in
+                let isMostRecent = entryIndex == 0
+                MenuPanelRecentQuestionRow(
+                    symbolName: memoryEntry.explainerVideoURL != nil ? "play.circle.fill" : "bubble.left",
+                    symbolColor: isMostRecent ? theme.accent : theme.faint,
+                    titleText: memoryEntry.question,
+                    metaText: metaText(sourceTitle: memoryEntry.sourceTitle, askedDate: memoryEntry.askedAt),
+                    isMostRecent: isMostRecent,
+                    theme: theme,
+                    onSelect: { openSavedMemory(memoryEntry) }
+                )
+            }
+        }
+    }
+
+    /// Questions saved before memory existed (or before the first memory is
+    /// written). They carry no answer or video address, so they aren't buttons.
+    @ViewBuilder
+    private var legacyRecentQuestionRows: some View {
         let displayedRecentQuestions = Array(recentQuestionsStore.recentQuestions.prefix(maximumRecentQuestionRowCount))
 
         if displayedRecentQuestions.isEmpty {
@@ -109,7 +191,7 @@ struct MenuPanelHomeView: View {
                         symbolName: recentQuestion.hadExplainerVideo ? "play.circle.fill" : "bubble.left",
                         symbolColor: isMostRecent ? theme.accent : theme.faint,
                         titleText: recentQuestion.questionText,
-                        metaText: metaText(for: recentQuestion),
+                        metaText: metaText(sourceTitle: recentQuestion.sourceDescription, askedDate: recentQuestion.askedDate),
                         isMostRecent: isMostRecent,
                         theme: theme
                     )
@@ -118,10 +200,74 @@ struct MenuPanelHomeView: View {
         }
     }
 
-    private func metaText(for recentQuestion: RecentQuestion) -> String {
-        let relativeTimeText = RecentQuestionsStore.relativeTimeDescription(for: recentQuestion.askedDate)
-        guard let sourceDescription = recentQuestion.sourceDescription else { return relativeTimeText }
-        return "\(sourceDescription) · \(relativeTimeText)"
+    private func metaText(sourceTitle: String?, askedDate: Date) -> String {
+        let relativeTimeText = RecentQuestionsStore.relativeTimeDescription(for: askedDate)
+        guard let sourceTitle = sourceTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceTitle.isEmpty else { return relativeTimeText }
+        return "\(sourceTitle.lowercased()) · \(relativeTimeText)"
+    }
+
+    /// Video → replay it in the explainer panel. No video (or the video file
+    /// is gone, or the explainer panel isn't around) → the saved answer card.
+    private func openSavedMemory(_ memoryEntry: MemoryEntry) {
+        if let explainerVideoURLString = memoryEntry.explainerVideoURL,
+           Self.isSavedVideoStillPlayable(explainerVideoURLString),
+           let explainerPanelManager = ExplainerPanelManager.shared {
+            explainerPanelManager.playSavedVideo(url: explainerVideoURLString, title: memoryEntry.question)
+            return
+        }
+        withAnimation(memoryAnimation) {
+            memoryEntryShownInAnswerCard = memoryEntry
+        }
+    }
+
+    /// Local files are checked on disk; studio URLs (http) are trusted, since
+    /// checking them would mean a network round trip on every tap.
+    private static func isSavedVideoStillPlayable(_ explainerVideoURLString: String) -> Bool {
+        guard let explainerVideoURL = URL(string: explainerVideoURLString) else { return false }
+        if explainerVideoURL.isFileURL {
+            return FileManager.default.fileExists(atPath: explainerVideoURL.path)
+        }
+        return true
+    }
+
+    // MARK: - "<pet> remembers" chips
+
+    private var displayedConceptReviews: [ConceptReview] {
+        memoryStore.topConcepts(limit: maximumMemoryChipCount)
+    }
+
+    @ViewBuilder
+    private var memoryChipsSection: some View {
+        let conceptReviews = displayedConceptReviews
+        if !conceptReviews.isEmpty {
+            MenuPanelHairline(theme: theme)
+                .padding(.top, 6)
+            MenuPanelSectionLabel(labelText: "\(petName) remembers", theme: theme)
+                .padding(.top, 10)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
+            MenuPanelWrappingLayout(horizontalSpacing: 5, verticalSpacing: 5) {
+                ForEach(Array(conceptReviews.enumerated()), id: \.element.id) { conceptIndex, conceptReview in
+                    MenuPanelMemoryConceptChip(
+                        conceptReview: conceptReview,
+                        isTopConcept: conceptIndex == 0,
+                        isActiveFilter: activeConceptFilter == conceptReview.concept,
+                        theme: theme,
+                        onTap: { toggleConceptFilter(conceptReview.concept) }
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func toggleConceptFilter(_ concept: String) {
+        withAnimation(memoryAnimation) {
+            memoryEntryShownInAnswerCard = nil
+            selectedConceptFilter = activeConceptFilter == concept ? nil : concept
+        }
     }
 
     // MARK: - Menu rows

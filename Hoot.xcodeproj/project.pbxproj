@@ -44,6 +44,7 @@
 		984666A80CC25358E0444DFE /* PetOverlaySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2943B9C00B0DE7D0DA6BADD4 /* PetOverlaySupport.swift */; };
 		98CF1802C8EB222EC177BED0 /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF119F016AA37AAC9E115C8C /* ViewHelpers.swift */; };
 		A2CB0E0DFB52DD9CF704EDB0 /* HootController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFFC3D42C5DDC9F6C80692F /* HootController.swift */; };
+		A589B2AD1456EA3ED8D4AF64 /* MenuPanelMemoryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D3DE49628CD72E53BF4A878 /* MenuPanelMemoryViews.swift */; };
 		B4E0925EFE5C84F4CAE751CA /* WaitWhatVoiceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83B8A3DE008E7C52E15734C6 /* WaitWhatVoiceSettings.swift */; };
 		CF6EB02DCF85C3607BA7F0C7 /* bit.json in Resources */ = {isa = PBXBuildFile; fileRef = 1E8D8CA8511345B5BF8152E4 /* bit.json */; };
 		DAE0DDE35481FD1F567BC875 /* hoot.json in Resources */ = {isa = PBXBuildFile; fileRef = EFE21683AC19BB66BD39EA5C /* hoot.json */; };
@@ -58,6 +59,7 @@
 		0AB635E700927BE6AB5B5C8C /* JetBrainsMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-SemiBold.ttf"; sourceTree = "<group>"; };
 		0BDFCE5EF8DA3C7AB1D99A85 /* ExplainerPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplainerPanelView.swift; sourceTree = "<group>"; };
 		1638B6065852F38E20D1CA58 /* MemoryCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCore.swift; sourceTree = "<group>"; };
+		1D3DE49628CD72E53BF4A878 /* MenuPanelMemoryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanelMemoryViews.swift; sourceTree = "<group>"; };
 		1E8D8CA8511345B5BF8152E4 /* bit.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bit.json; sourceTree = "<group>"; };
 		24300B22D26D7B1B49054492 /* MenuPanelOnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanelOnboardingView.swift; sourceTree = "<group>"; };
 		276CF46A31616FE267788FCB /* VoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputController.swift; sourceTree = "<group>"; };
@@ -200,6 +202,7 @@
 			children = (
 				94ED42D992F48CA68936D380 /* MenuPanelControls.swift */,
 				F6CDDDFB64D5A64A8BEB81FB /* MenuPanelHomeView.swift */,
+				1D3DE49628CD72E53BF4A878 /* MenuPanelMemoryViews.swift */,
 				24300B22D26D7B1B49054492 /* MenuPanelOnboardingView.swift */,
 				CC2C4D1C8375EF589B2B0BB1 /* MenuPanelSettingsView.swift */,
 				877FC079A7A93699A8C8B211 /* MenuPanelView.swift */,
@@ -338,6 +341,7 @@
 				609486BAB267AB4375D7B68D /* MenuBarController.swift in Sources */,
 				10D85B553B8D1508F087B4BC /* MenuPanelControls.swift in Sources */,
 				3F192B5B7086D92C0CE39CB2 /* MenuPanelHomeView.swift in Sources */,
+				A589B2AD1456EA3ED8D4AF64 /* MenuPanelMemoryViews.swift in Sources */,
 				0D447BC46058330D35F39DC2 /* MenuPanelOnboardingView.swift in Sources */,
 				E2FFF59D0E6069DD663B81F9 /* MenuPanelSettingsView.swift in Sources */,
 				17381C28F906D56FC96064D3 /* MenuPanelView.swift in Sources */,

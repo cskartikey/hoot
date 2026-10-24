@@ -81,6 +81,13 @@ final class RecentQuestionsStore: ObservableObject {
         persistRecentQuestions()
     }
 
+    /// Settings → memory → "forget everything" empties this list too, so no
+    /// old question lingers in the panel after the memory is wiped.
+    func clearAllRecentQuestions() {
+        recentQuestions = []
+        UserDefaults.standard.removeObject(forKey: Self.recentQuestionsDefaultsKey)
+    }
+
     private func persistRecentQuestions() {
         guard let encodedRecentQuestions = try? JSONEncoder().encode(recentQuestions) else { return }
         UserDefaults.standard.set(encodedRecentQuestions, forKey: Self.recentQuestionsDefaultsKey)
