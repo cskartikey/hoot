@@ -5,7 +5,9 @@
 //  The coordinator: push-to-talk → screenshot (+ YouTube context) → LLM →
 //  streamed Cartesia speech, [POINT:] pointing, [VIDEO:] explainer
 //  requests, recent questions, memory ([CONCEPT:] capture, recall of past
-//  confusions into the prompt) and spaced-review turns ([REVIEW:]).
+//  confusions into the prompt), spaced-review turns ([REVIEW:]) and hoot's
+//  own follow-up questions ([PREDICT] guess-first, [CHECK:] quick checks),
+//  which the learner's next hold answers.
 //
 
 import AppKit
@@ -78,6 +80,31 @@ final class HootController: ObservableObject {
     /// Set by the app delegate from the explainer panel's phase.
     @Published var isExplainerVideoPlaying = false
 
+    /// hoot ended its reply with a question of its own and is waiting for
+    /// the learner's next hold to answer it. A prediction defers the real
+    /// answer until they guess (learnharness's predict-then-teach); a quick
+    /// check is one applied question after an answer, graded like a spaced
+    /// review so the result lands on the concept's review ladder.
+    struct FollowUpQuestion: Equatable {
+        enum Kind: Equatable {
+            case prediction
+            case quickCheck
+        }
+        let kind: Kind
+        /// What hoot asked, word for word.
+        let question: String
+        /// Prediction: the learner's original question hoot deferred.
+        /// Quick check: the concept being checked.
+        let subject: String
+        /// Whether the question that asked this paused a YouTube video (it
+        /// stays paused until the follow-up is answered or abandoned).
+        let didPauseYouTubeVideo: Bool
+        let askedDate: Date
+    }
+    @Published private(set) var pendingFollowUpQuestion: FollowUpQuestion?
+    /// "quick checks" in settings: every teaching answer ends with a check.
+    @Published private(set) var isQuickCheckAfterAnswersEnabled = false
+
     /// "always visible" in settings: show hoot dozing in the corner.
     @Published private(set) var isCornerPetEnabled = true
     @Published private(set) var selectedModel = "claude-sonnet-5-5"
@@ -101,6 +128,9 @@ final class HootController: ObservableObject {
 
     private static let cornerPetEnabledDefaultsKey = "hootCornerPetEnabled"
     private static let selectedModelDefaultsKey = "hootSelectedModel"
+    private static let quickCheckAfterAnswersEnabledDefaultsKey = "hootQuickChecksAfterAnswersEnabled"
+    /// After this, an unanswered follow-up question is forgotten.
+    private static let secondsAFollowUpQuestionStaysOpen: TimeInterval = 90
     private static let maximumConversationTurnsKept = 10
     /// How long a hands-free review answer may take before we stop listening.
     private static let secondsToListenForReviewAnswer: Double = 20
@@ -130,6 +160,7 @@ final class HootController: ObservableObject {
         if userDefaults.object(forKey: Self.cornerPetEnabledDefaultsKey) != nil {
             isCornerPetEnabled = userDefaults.bool(forKey: Self.cornerPetEnabledDefaultsKey)
         }
+        isQuickCheckAfterAnswersEnabled = userDefaults.bool(forKey: Self.quickCheckAfterAnswersEnabledDefaultsKey)
         wireVoiceInput()
 
         // "forget everything" also forgets this session's conversation.
@@ -177,6 +208,28 @@ final class HootController: ObservableObject {
         selectedModel = model
         llmClient.model = model
         UserDefaults.standard.set(model, forKey: Self.selectedModelDefaultsKey)
+    }
+
+    func setQuickCheckAfterAnswersEnabled(_ isEnabled: Bool) {
+        isQuickCheckAfterAnswersEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: Self.quickCheckAfterAnswersEnabledDefaultsKey)
+    }
+
+    /// Called by the overlay when hoot leaves the cursor without an answer
+    /// to its question: forget it and give the lecture back.
+    func abandonPendingFollowUpQuestion() {
+        guard pendingFollowUpQuestion != nil else { return }
+        pendingFollowUpQuestion = nil
+        Task { await youTubeContextProvider.resumeVideoIfWePausedIt() }
+    }
+
+    /// The open follow-up question, unless it has gone stale.
+    private var openFollowUpQuestion: FollowUpQuestion? {
+        guard let pendingFollowUpQuestion,
+              Date().timeIntervalSince(pendingFollowUpQuestion.askedDate) <= Self.secondsAFollowUpQuestionStaysOpen else {
+            return nil
+        }
+        return pendingFollowUpQuestion
     }
 
     /// Called by the overlay when the pet has finished pointing.
@@ -229,8 +282,11 @@ final class HootController: ObservableObject {
                 bySeconds: SpacedReviewSchedule.laterPostponementInSeconds
             )
         }
-        // Nothing was asked, so give the lecture back.
-        Task { await youTubeContextProvider.resumeVideoIfWePausedIt() }
+        // Nothing was asked, so give the lecture back, unless hoot is still
+        // waiting on an answer to its own question (abandoning that resumes).
+        if pendingFollowUpQuestion == nil {
+            Task { await youTubeContextProvider.resumeVideoIfWePausedIt() }
+        }
     }
 
     // MARK: - Push to talk
@@ -253,9 +309,17 @@ final class HootController: ObservableObject {
 
         // Pause YouTube right away so the lecture doesn't keep talking over
         // the question. Fire-and-forget: dictation must never wait on this.
-        currentQuestionYouTubePauseTask = Task {
-            let pausedVideoSnapshot = await youTubeContextProvider.pauseVideo()
-            return pausedVideoSnapshot != nil
+        // While hoot's own question is open the video is still paused from
+        // the question that asked it; pausing again would read "already
+        // paused" and we'd never resume it, so reuse that question's answer.
+        if let openFollowUpQuestion {
+            let didThatQuestionPauseTheVideo = openFollowUpQuestion.didPauseYouTubeVideo
+            currentQuestionYouTubePauseTask = Task { didThatQuestionPauseTheVideo }
+        } else {
+            currentQuestionYouTubePauseTask = Task {
+                let pausedVideoSnapshot = await youTubeContextProvider.pauseVideo()
+                return pausedVideoSnapshot != nil
+            }
         }
 
         voiceState = .listening
@@ -293,9 +357,12 @@ final class HootController: ObservableObject {
         cancelCurrentAnswerAndSpeech()
         let pipelineGeneration = answerGeneration
         let youTubePauseTaskForThisQuestion = currentQuestionYouTubePauseTask
-        // A review turn lasts exactly one answer.
+        // A review turn lasts exactly one answer, and so does hoot's own
+        // follow-up question (a review nudge outranks it).
         let reviewTurnForThisQuestion = activeReviewTurn
         activeReviewTurn = nil
+        let followUpQuestionForThisAnswer = reviewTurnForThisQuestion == nil ? openFollowUpQuestion : nil
+        pendingFollowUpQuestion = nil
 
         isAnswerPipelineRunning = true
         voiceState = .processing
@@ -306,6 +373,7 @@ final class HootController: ObservableObject {
             await self?.runAnswerPipeline(
                 questionText: trimmedQuestionText,
                 reviewTurn: reviewTurnForThisQuestion,
+                followUpQuestion: followUpQuestionForThisAnswer,
                 pipelineGeneration: pipelineGeneration,
                 youTubePauseTask: youTubePauseTaskForThisQuestion
             )
@@ -319,12 +387,19 @@ final class HootController: ObservableObject {
     private func runAnswerPipeline(
         questionText: String,
         reviewTurn: ReviewTurn?,
+        followUpQuestion: FollowUpQuestion?,
         pipelineGeneration: Int,
         youTubePauseTask: Task<Bool, Never>?
     ) async {
         var didRequestExplainerVideo = false
         /// Offered after the reply is spoken, so the nudge doesn't talk over it.
         var savedVideoEntryToOfferAfterForgottenReview: MemoryEntry?
+        /// Set when this reply ends with hoot's own question ([PREDICT] /
+        /// [CHECK:]); the video then stays paused for the answer.
+        var didAskAFollowUpQuestion = false
+        /// For a guess, the records (memory, recent) carry the question hoot
+        /// deferred, not the guess itself.
+        let questionTextForRecords = followUpQuestion?.kind == .prediction ? followUpQuestion!.subject : questionText
 
         do {
             let capturedScreens = try await ScreenCapturer.captureAllScreens()
@@ -336,6 +411,8 @@ final class HootController: ObservableObject {
             var userPromptWithVideoContext = questionText
             if let reviewTurn {
                 userPromptWithVideoContext = Self.userTextForReviewAnswer(questionText, reviewTurn: reviewTurn)
+            } else if let followUpQuestion {
+                userPromptWithVideoContext = Self.userTextForFollowUpAnswer(questionText, followUpQuestion: followUpQuestion)
             }
             var youTubeContextForExplainerVideo: StudioYouTubeContext?
             var memoryRecallQueryLines = [questionText]
@@ -376,6 +453,21 @@ final class HootController: ObservableObject {
                     savedAnswerSummary: latestEntryForConcept?.answerSummary,
                     hasSavedExplainerVideo: MemoryStore.shared.mostRecentEntryWithExplainerVideo(forConcept: reviewTurn.concept) != nil
                 )
+            } else if let followUpQuestion {
+                switch followUpQuestion.kind {
+                case .prediction:
+                    systemPrompt += HootTutorPrompt.predictionResolutionPromptBlock(
+                        originalQuestion: followUpQuestion.subject,
+                        predictionQuestion: followUpQuestion.question
+                    )
+                case .quickCheck:
+                    systemPrompt += HootTutorPrompt.quickCheckGradingPromptBlock(
+                        concept: followUpQuestion.subject,
+                        checkQuestion: followUpQuestion.question
+                    )
+                }
+            } else if isQuickCheckAfterAnswersEnabled {
+                systemPrompt += HootTutorPrompt.quickChecksAlwaysOnPromptBlock
             }
 
             // Speak the answer sentence by sentence while it is still being
@@ -404,9 +496,21 @@ final class HootController: ObservableObject {
             let recentQuestionSourceDescription = youTubeContextForExplainerVideo?.title
                 ?? NSWorkspace.shared.frontmostApplication?.localizedName
 
-            // Remember what they got stuck on (skipped for chit-chat and for
-            // review answers, which are graded instead).
+            // hoot asked them something instead of (or after) answering: the
+            // next hold answers it. Never chained off a graded reply.
+            let isAskingForAPrediction = reviewTurn == nil && followUpQuestion == nil
+                && HootResponseTags.hasPredictionTag(in: fullResponseText)
+            // A quick-check answer graded with [REVIEW:]; nil ([REVIEW:none])
+            // means they asked something new instead, answered normally.
+            let quickCheckResult: ReviewResult? = followUpQuestion?.kind == .quickCheck
+                ? HootResponseTags.parseReviewResult(from: fullResponseText)
+                : nil
+            let isGradedQuickCheckAnswer = quickCheckResult != nil
+
+            // Remember what they got stuck on (skipped for chit-chat, for a
+            // guess prompt, and for graded answers).
             var rememberedEntryId: UUID?
+            let conceptForThisAnswer = HootResponseTags.parseConcept(from: fullResponseText)
             if let reviewTurn {
                 let reviewResult = HootResponseTags.parseReviewResult(from: fullResponseText) ?? .shaky
                 MemoryStore.shared.recordReviewResult(reviewResult, forConcept: reviewTurn.concept)
@@ -414,9 +518,12 @@ final class HootController: ObservableObject {
                     savedVideoEntryToOfferAfterForgottenReview = MemoryStore.shared
                         .mostRecentEntryWithExplainerVideo(forConcept: reviewTurn.concept)
                 }
-            } else if let concept = HootResponseTags.parseConcept(from: fullResponseText) {
+            } else if let quickCheckResult, let followUpQuestion {
+                MemoryStore.shared.recordReviewResult(quickCheckResult, forConcept: followUpQuestion.subject)
+                print("✅ quick check on \(followUpQuestion.subject): \(quickCheckResult)")
+            } else if !isAskingForAPrediction, let concept = conceptForThisAnswer {
                 rememberedEntryId = MemoryStore.shared.recordAnsweredQuestion(
-                    question: questionText,
+                    question: questionTextForRecords,
                     concept: concept,
                     answerSummary: HootResponseTags.answerSummary(fromSpokenText: spokenText),
                     sourceTitle: recentQuestionSourceDescription,
@@ -449,15 +556,48 @@ final class HootController: ObservableObject {
 
             // Show it under "recent" in the menu bar panel. The source is the
             // YouTube video's title when the question paused one, else the app.
-            if reviewTurn == nil {
+            if reviewTurn == nil, !isGradedQuickCheckAnswer, !isAskingForAPrediction {
                 RecentQuestionsStore.shared.recordQuestion(
-                    questionText: questionText,
+                    questionText: questionTextForRecords,
                     sourceDescription: recentQuestionSourceDescription,
                     hadExplainerVideo: didRequestExplainerVideo
                 )
             }
 
-            let userTextForHistory = reviewTurn.map { Self.userTextForReviewAnswer(questionText, reviewTurn: $0) } ?? questionText
+            // What hoot is now waiting on, if anything.
+            if isAskingForAPrediction {
+                let predictionPrompt = spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !predictionPrompt.isEmpty {
+                    pendingFollowUpQuestion = FollowUpQuestion(
+                        kind: .prediction,
+                        question: predictionPrompt,
+                        subject: questionText,
+                        didPauseYouTubeVideo: didPauseYouTubeVideoForThisQuestion,
+                        askedDate: Date()
+                    )
+                    didAskAFollowUpQuestion = true
+                }
+            } else if reviewTurn == nil, !isGradedQuickCheckAnswer,
+                      let quickCheckQuestion = HootResponseTags.parseQuickCheckQuestion(from: fullResponseText),
+                      let concept = conceptForThisAnswer {
+                pendingFollowUpQuestion = FollowUpQuestion(
+                    kind: .quickCheck,
+                    question: quickCheckQuestion,
+                    subject: concept,
+                    didPauseYouTubeVideo: didPauseYouTubeVideoForThisQuestion,
+                    askedDate: Date()
+                )
+                didAskAFollowUpQuestion = true
+            }
+
+            let userTextForHistory: String
+            if let reviewTurn {
+                userTextForHistory = Self.userTextForReviewAnswer(questionText, reviewTurn: reviewTurn)
+            } else if let followUpQuestion {
+                userTextForHistory = Self.userTextForFollowUpAnswer(questionText, followUpQuestion: followUpQuestion)
+            } else {
+                userTextForHistory = questionText
+            }
             conversationHistory.append(LLMClient.ConversationTurn(userText: userTextForHistory, assistantText: fullResponseText))
             if conversationHistory.count > Self.maximumConversationTurnsKept {
                 conversationHistory.removeFirst(conversationHistory.count - Self.maximumConversationTurnsKept)
@@ -510,9 +650,11 @@ final class HootController: ObservableObject {
             onReviewForgotWithSavedVideo?(savedVideoEntryToOfferAfterForgottenReview)
         }
 
-        // The explainer panel resumes the video when it closes; otherwise the
-        // answer is over, so give the lecture back.
-        if !didRequestExplainerVideo {
+        // The explainer panel resumes the video when it closes, and a
+        // question hoot asked keeps it paused for the answer (abandoning the
+        // question resumes it); otherwise the answer is over, so give the
+        // lecture back.
+        if !didRequestExplainerVideo && !didAskAFollowUpQuestion {
             await youTubeContextProvider.resumeVideoIfWePausedIt()
         }
     }
@@ -522,6 +664,17 @@ final class HootController: ObservableObject {
     /// What the tutor (and the history) sees for a spoken review answer.
     private static func userTextForReviewAnswer(_ spokenAnswer: String, reviewTurn: ReviewTurn) -> String {
         "(my answer to your quick check about \(reviewTurn.concept): \"\(reviewTurn.question)\") \(spokenAnswer)"
+    }
+
+    /// What the tutor (and the history) sees for the answer to hoot's own
+    /// question: a guess, or a quick-check answer.
+    private static func userTextForFollowUpAnswer(_ spokenAnswer: String, followUpQuestion: FollowUpQuestion) -> String {
+        switch followUpQuestion.kind {
+        case .prediction:
+            return "(my guess, answering \"\(followUpQuestion.question)\". what i originally asked: \"\(followUpQuestion.subject)\") \(spokenAnswer)"
+        case .quickCheck:
+            return "(my answer to your quick check about \(followUpQuestion.subject): \"\(followUpQuestion.question)\") \(spokenAnswer)"
+        }
     }
 
     /// The last few transcript lines with their "[mm:ss]" stamps removed.

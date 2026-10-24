@@ -23,7 +23,7 @@ Claude Design project `286d4c78-b5ca-45ef-81a2-7406b0b3e63f` (read with the clau
 
 ## Status / open items (as of Sat Oct 24 afternoon)
 - Brain is OpenAI (`gpt-6.1-sol`) until an Anthropic key is added to `worker/.dev.vars` (then remove `BRAIN=openai`). Prizes targeted: Anthropic, Cartesia, Best Solo.
-- Not built: memory ("hoot remembers" concepts across sessions), corner nudges, reopening a recent question's saved video.
+- Memory, corner nudges and spaced review are built (`docs/MEMORY.md`). From learnharness (`docs/LEARNHARNESS.md`): teaching doctrine, guess-first (`[PREDICT]`) and quick checks (`[CHECK:q]`, graded via `[REVIEW:]`) are built; `HootController.pendingFollowUpQuestion` is what the next ⌃⌥ hold answers. Walkthrough mode (multi-step pointing) is designed, not built: waits on a Claude Design pass for the frame's step/done states.
 - Overlay restyle (speech bubbles etc.) may come as another Claude Design handoff.
 - AssemblyAI may refuse with "too many concurrent sessions" if another app uses the same key.
 

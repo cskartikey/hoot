@@ -262,6 +262,13 @@ struct MenuPanelSettingsView: View {
             )
 
             memorySwitchRow(
+                titleText: "quick checks",
+                isOn: hootController.isQuickCheckAfterAnswersEnabled,
+                helpText: "\(petName) ends every answer with one quick question to answer out loud",
+                onToggle: { isNowOn in hootController.setQuickCheckAfterAnswersEnabled(isNowOn) }
+            )
+
+            memorySwitchRow(
                 titleText: "review demo mode",
                 isOn: isReviewDemoModeOn,
                 helpText: "reviews come due after minutes instead of days",

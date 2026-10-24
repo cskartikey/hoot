@@ -166,9 +166,11 @@ struct PetAnswerBubbleView: View {
 // MARK: - Linger
 
 /// Glass capsule under the head during the follow-up window: a small ⌃⌥
-/// keycap (JBM 10/600) and "follow up" (JBM 10.5 muted).
+/// keycap (JBM 10/600) and a label (JBM 10.5 muted): "follow up", or what
+/// hoot is waiting for ("your guess", "answer").
 struct PetFollowUpPillView: View {
     let theme: WaitWhatTheme
+    var labelText = "follow up"
 
     var body: some View {
         HStack(spacing: 6) {
@@ -182,7 +184,7 @@ struct PetFollowUpPillView: View {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .strokeBorder(theme.foreground(opacity: 0.15), lineWidth: 0.5)
                 )
-            Text("follow up")
+            Text(labelText)
                 .font(.jetBrainsMono(10.5, weight: .medium))
                 .foregroundColor(theme.muted)
         }

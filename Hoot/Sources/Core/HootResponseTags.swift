@@ -81,6 +81,21 @@ enum HootResponseTags {
         return normalizedConcept
     }
 
+    /// True when the reply carries [PREDICT]: hoot asked for a guess instead
+    /// of answering, and the learner's next hold is that guess.
+    static func hasPredictionTag(in responseText: String) -> Bool {
+        responseText.range(of: #"\[PREDICT\s*\]"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The question from [CHECK:question], or nil when there is none (or it
+    /// is empty / implausibly long).
+    static func parseQuickCheckQuestion(from responseText: String) -> String? {
+        guard let rawQuestion = firstTagValue(named: "CHECK", in: responseText) else { return nil }
+        let trimmedQuestion = rawQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuestion.isEmpty, trimmedQuestion.lowercased() != "none", trimmedQuestion.count <= 240 else { return nil }
+        return trimmedQuestion
+    }
+
     /// The grade from [REVIEW:remembered|shaky|forgot], or nil.
     static func parseReviewResult(from responseText: String) -> ReviewResult? {
         guard let rawReviewResult = firstTagValue(named: "REVIEW", in: responseText) else { return nil }

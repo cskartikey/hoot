@@ -84,7 +84,16 @@ final class PetOverlayCoordinator: ObservableObject {
 
     static let fullBodySideLength: CGFloat = 48
     static let headSideLength: CGFloat = 24
-    let lingerDurationInSeconds: TimeInterval = 3
+    /// Much longer when hoot asked them something: the question stays on
+    /// screen (sticky) until it is answered or a minute passes.
+    var lingerDurationInSeconds: TimeInterval {
+        isWaitingForAnAnswer ? 60 : 3
+    }
+
+    /// hoot ended its reply with a question the next hold answers.
+    var isWaitingForAnAnswer: Bool {
+        hootController.pendingFollowUpQuestion != nil
+    }
 
     /// Head center relative to the cursor tip, in SwiftUI terms (+x right,
     /// +y down): just below-right of the arrow, as in the 4a mock.
@@ -264,7 +273,10 @@ final class PetOverlayCoordinator: ObservableObject {
                 phase = .atCursor
             } else {
                 let hasLingerTimedOut = now.timeIntervalSince(lingerStartDate) >= lingerDurationInSeconds
-                let isLearnerMovingAwayFast = cursorSpeedInPointsPerSecond > cursorSpeedThatSkipsLingerInPointsPerSecond
+                // A flick of the mouse skips an ordinary follow-up window, but
+                // never drops a question hoot is waiting on.
+                let isLearnerMovingAwayFast = !isWaitingForAnAnswer
+                    && cursorSpeedInPointsPerSecond > cursorSpeedThatSkipsLingerInPointsPerSecond
                 if hasLingerTimedOut || isLearnerMovingAwayFast {
                     endCursorSession()
                 }
@@ -457,6 +469,8 @@ final class PetOverlayCoordinator: ObservableObject {
     /// hoot to go back to.
     private func endCursorSession() {
         hootQuietSinceDate = nil
+        // Leaving without an answer drops hoot's open question.
+        hootController.abandonPendingFollowUpQuestion()
 
         guard isCornerHootAllowed else {
             phase = .fadingOut

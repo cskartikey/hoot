@@ -22,6 +22,7 @@ struct PetOverlayScreenView: View {
     @State private var transcriptBubbleSize: CGSize = .zero
     @State private var answerBubbleSize: CGSize = .zero
     @State private var followUpPillSize: CGSize = .zero
+    @State private var pendingQuestionBubbleSize: CGSize = .zero
     @State private var pointingLabelChipSize: CGSize = .zero
 
     var body: some View {
@@ -222,8 +223,37 @@ struct PetOverlayScreenView: View {
                 )
                 .animation(followAnimation, value: headFrame)
 
-            // Linger: "⌃⌥ follow up" pill under the head + countdown bar beside it.
-            PetFollowUpPillView(theme: theme)
+            // Waiting on an answer: hoot's question stays up in a bubble under
+            // the head (sticky, so it doesn't vanish with the speech), with the
+            // "⌃⌥ answer" pill hanging under the bubble instead of the head.
+            let pendingQuestionText = phase == .lingering ? (hootController.pendingFollowUpQuestion?.question ?? "") : ""
+            let isShowingPendingQuestion = !pendingQuestionText.isEmpty
+            let pendingQuestionBubbleCenter = PetOverlayPlacement.centerForBubbleNearHead(
+                headFrame: headFrame,
+                bubbleSize: pendingQuestionBubbleSize,
+                screenSize: screenSize,
+                avoiding: pointingFrameRectToKeepClear()
+            )
+            PetAnswerBubbleView(answerText: pendingQuestionText, theme: theme)
+                .onGeometryChange(for: CGSize.self) { geometry in geometry.size } action: { newSize in
+                    pendingQuestionBubbleSize = newSize
+                }
+                .opacity(isShowingPendingQuestion ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: isShowingPendingQuestion)
+                .position(pendingQuestionBubbleCenter)
+                .animation(followAnimation, value: headFrame)
+
+            // Linger: "⌃⌥ follow up" pill under the head (or under the
+            // question bubble) + countdown bar beside the head.
+            let pillAnchorFrame: CGRect = isShowingPendingQuestion
+                ? CGRect(
+                    x: pendingQuestionBubbleCenter.x - pendingQuestionBubbleSize.width / 2,
+                    y: pendingQuestionBubbleCenter.y - pendingQuestionBubbleSize.height / 2,
+                    width: pendingQuestionBubbleSize.width,
+                    height: pendingQuestionBubbleSize.height
+                ).offsetBy(dx: 2, dy: -2)
+                : headFrame.offsetBy(dx: 2, dy: 0)
+            PetFollowUpPillView(theme: theme, labelText: followUpPillLabelText)
                 .onGeometryChange(for: CGSize.self) { geometry in geometry.size } action: { newSize in
                     followUpPillSize = newSize
                 }
@@ -231,7 +261,7 @@ struct PetOverlayScreenView: View {
                 .animation(.easeOut(duration: 0.2), value: phase == .lingering)
                 .position(
                     PetOverlayPlacement.centerForBubbleBelowHead(
-                        headFrame: headFrame.offsetBy(dx: 2, dy: 0),
+                        headFrame: pillAnchorFrame,
                         bubbleSize: followUpPillSize,
                         screenSize: screenSize
                     )
@@ -282,6 +312,16 @@ struct PetOverlayScreenView: View {
                     prefersRightSideOfHead: targetX < headFrame.midX
                 )
             )
+    }
+
+    /// What the linger pill asks for: a guess or an answer when hoot ended
+    /// its reply with a question, otherwise a follow-up.
+    private var followUpPillLabelText: String {
+        switch hootController.pendingFollowUpQuestion?.kind {
+        case .prediction: return "your guess"
+        case .quickCheck: return "answer"
+        case nil: return "follow up"
+        }
     }
 
     /// The index-card frame's rect on this screen (depth edge and tab room
