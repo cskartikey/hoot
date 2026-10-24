@@ -288,6 +288,12 @@ enum PetAnimationState: String, CaseIterable {
     case pointing
     case presenting
     case hello
+    // Walkthrough head states (WALKTHROUGH.md): watching the learner work,
+    // watching with the cursor inside the box, the peek, and the done hop.
+    case watching
+    case watchingIn
+    case peek
+    case happy
 }
 
 /// One mascot's frames, decoded from Pets/<name>.json

@@ -28,7 +28,14 @@ final class CartesiaTTSClient {
     private struct QueuedSentence {
         let sentenceText: String
         let audioFetchTask: Task<Data, Error>
+        /// 0-based position of this sentence in the current answer.
+        let sentenceIndex: Int
+        /// Walkthrough: the step whose sentence this is (its frame lands
+        /// when this clip starts). nil for ordinary sentences.
+        let walkthroughStepIndex: Int?
     }
+    /// How many sentences the current answer has enqueued (empty ones don't count).
+    private var enqueuedSentenceCount = 0
 
     private var queuedSentences: [QueuedSentence] = []
     private var playbackLoopTask: Task<Void, Never>?
@@ -44,6 +51,10 @@ final class CartesiaTTSClient {
     var onFirstAudioStarted: (() -> Void)?
     /// Called once per answer if speaking failed before anything was heard.
     var onSpeechFailedBeforeAnyAudio: ((Error) -> Void)?
+    /// Called when each sentence's clip starts (or is skipped after a fetch
+    /// failure, so a walkthrough step is never lost): the sentence's index
+    /// in the answer and the walkthrough step it carries, if any.
+    var onSentenceStarted: ((_ sentenceIndex: Int, _ walkthroughStepIndex: Int?) -> Void)?
 
     init(proxyURL: String) {
         self.proxyURL = URL(string: proxyURL)!
@@ -62,10 +73,12 @@ final class CartesiaTTSClient {
         hasFinishedEnqueueingForCurrentAnswer = false
         fullySpokenText = ""
         hasStartedPlayingCurrentAnswer = false
+        enqueuedSentenceCount = 0
     }
 
     /// Queues one complete sentence. Its audio starts downloading immediately.
-    func enqueueSentence(_ sentenceText: String) {
+    /// `walkthroughStepIndex` tags the sentence that starts a walkthrough step.
+    func enqueueSentence(_ sentenceText: String, walkthroughStepIndex: Int? = nil) {
         let trimmedSentenceText = sentenceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSentenceText.isEmpty else { return }
 
@@ -73,7 +86,13 @@ final class CartesiaTTSClient {
             guard let self else { throw CancellationError() }
             return try await self.fetchSpeechAudio(for: trimmedSentenceText)
         }
-        queuedSentences.append(QueuedSentence(sentenceText: trimmedSentenceText, audioFetchTask: audioFetchTask))
+        queuedSentences.append(QueuedSentence(
+            sentenceText: trimmedSentenceText,
+            audioFetchTask: audioFetchTask,
+            sentenceIndex: enqueuedSentenceCount,
+            walkthroughStepIndex: walkthroughStepIndex
+        ))
+        enqueuedSentenceCount += 1
         startPlaybackLoopIfNeeded()
     }
 
@@ -139,6 +158,7 @@ final class CartesiaTTSClient {
             do {
                 let audioData = try await nextSentence.audioFetchTask.value
                 guard !Task.isCancelled else { return }
+                onSentenceStarted?(nextSentence.sentenceIndex, nextSentence.walkthroughStepIndex)
                 try await play(audioData: audioData, revealing: nextSentence.sentenceText)
             } catch is CancellationError {
                 return
@@ -152,7 +172,9 @@ final class CartesiaTTSClient {
                     onSpeechFailedBeforeAnyAudio?(error)
                     return
                 }
-                // Mid-answer failure: skip the sentence but still show its text.
+                // Mid-answer failure: skip the sentence but still show its text
+                // (and still land its walkthrough step, if it carried one).
+                onSentenceStarted?(nextSentence.sentenceIndex, nextSentence.walkthroughStepIndex)
                 appendToFullySpokenText(nextSentence.sentenceText)
                 onSpokenTextProgress?(fullySpokenText)
             }

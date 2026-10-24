@@ -132,11 +132,17 @@ enum HootResponseTags {
     /// Only the text before the first "[" is ever spoken. Tags always come at
     /// the end, so this is the same rule the streaming speech uses, which keeps
     /// the "already enqueued" character count valid against the final text.
+    // MARK: - Walkthrough
+    // The one exception: walkthrough [STEP n/N POINT:...] tags sit inline
+    // BEFORE each sentence, so they are stripped first (each becomes one
+    // space, prefix-stable as the stream grows) and the cut happens at the
+    // first tag that is not a step tag.
     static func speakableText(from responseText: String) -> String {
-        if let firstTagStart = responseText.firstIndex(of: "[") {
-            return String(responseText[..<firstTagStart])
+        let textWithoutStepTags = HootWalkthroughTags.stripStepTags(from: responseText).strippedText
+        if let firstTagStart = textWithoutStepTags.firstIndex(of: "[") {
+            return String(textWithoutStepTags[..<firstTagStart])
         }
-        return responseText
+        return textWithoutStepTags
     }
 
     /// Finds a [VIDEO:brief] tag anywhere in the response and removes it,

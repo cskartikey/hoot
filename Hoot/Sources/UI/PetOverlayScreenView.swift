@@ -64,6 +64,13 @@ struct PetOverlayScreenView: View {
                 theme: theme
             )
 
+            // MARK: - Walkthrough
+            PetWalkthroughFrameLayer(
+                screenFrame: screenFrame,
+                walkthroughCoordinator: petOverlayCoordinator.walkthroughCoordinator,
+                theme: theme
+            )
+
             if isPetNearThisScreen {
                 // The fade animation sits above `.position` so showing or
                 // hiding the corner hoot never animates where it is.
@@ -162,6 +169,7 @@ struct PetOverlayScreenView: View {
             || phase == .flyingToTarget
             || phase == .pointingAtTarget
             || phase == .flyingBackToCursor
+            || phase == .walkthrough
         let isShowingAnswerBubble = isAnswering && voiceState != .listening && isTalking && !answerText.isEmpty
         let isThinking = phase == .atCursor
             && voiceState == .processing
@@ -340,6 +348,16 @@ struct PetOverlayScreenView: View {
     /// stay clear of what is being explained. nil when not pointing.
     private func pointingFrameRectToKeepClear() -> CGRect? {
         let phase = petOverlayCoordinator.phase
+        // MARK: - Walkthrough
+        if phase == .walkthrough, let walkthroughFrameRect = petOverlayCoordinator.walkthroughCoordinator.frameRectInGlobalSpace {
+            let frameTopLeft = localPoint(fromGlobalPoint: CGPoint(x: walkthroughFrameRect.minX, y: walkthroughFrameRect.maxY))
+            return CGRect(
+                x: frameTopLeft.x,
+                y: frameTopLeft.y - PetPointingFrameView.roomForTabAboveAndBelow,
+                width: walkthroughFrameRect.width + PetPointingFrameView.depthEdgeOutset,
+                height: walkthroughFrameRect.height + 2 * PetPointingFrameView.roomForTabAboveAndBelow
+            )
+        }
         guard phase == .flyingToTarget || phase == .pointingAtTarget,
               let pointingTargetInGlobalSpace = petOverlayCoordinator.pointingTargetInGlobalSpace else { return nil }
         let frameSize = PetPointingFrameView.paddedFrameSize(
