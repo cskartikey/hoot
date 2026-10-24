@@ -3,6 +3,7 @@
 //  Hoot
 //
 //  Pulls the machine-readable tags out of the tutor's answer:
+//    [SKETCH:brief]                → ask the LLM for a quick animated sketch
 //    [VIDEO:brief]                 → ask the studio for an explainer video
 //    [POINT:x,y,w,h:label(:screenN)] → box the thing (top-left x,y + size)
 //    [POINT:x,y:label(:screenN)]   → older point form (center only)
@@ -141,17 +142,32 @@ enum HootResponseTags {
     /// Finds a [VIDEO:brief] tag anywhere in the response and removes it,
     /// so the brief is never spoken aloud.
     static func parseExplainerVideoRequest(from responseText: String) -> (textWithoutVideoTag: String, explainerVideoBrief: String?) {
-        let pattern = #"\[VIDEO:([^\]]+)\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        let parseResult = removeFirstBriefTag(named: "VIDEO", from: responseText)
+        return (parseResult.textWithoutTag, parseResult.brief)
+    }
+
+    /// Finds a [SKETCH:brief] tag (the quick animated-SVG path) and removes
+    /// it, the same way as the video tag.
+    static func parseSketchRequest(from responseText: String) -> (textWithoutSketchTag: String, sketchBrief: String?) {
+        let parseResult = removeFirstBriefTag(named: "SKETCH", from: responseText)
+        return (parseResult.textWithoutTag, parseResult.brief)
+    }
+
+    /// Shared by the video and sketch parsers: the first [NAME:brief] tag,
+    /// cut out of the text, with its brief trimmed. Case-insensitive on NAME
+    /// because models occasionally lowercase a tag.
+    private static func removeFirstBriefTag(named tagName: String, from responseText: String) -> (textWithoutTag: String, brief: String?) {
+        let pattern = #"\["# + tagName + #"\s*:([^\]]+)\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)),
               let briefRange = Range(match.range(at: 1), in: responseText),
               let fullTagRange = Range(match.range, in: responseText) else {
             return (responseText, nil)
         }
-        let explainerVideoBrief = String(responseText[briefRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-        var textWithoutVideoTag = responseText
-        textWithoutVideoTag.removeSubrange(fullTagRange)
-        return (textWithoutVideoTag, explainerVideoBrief)
+        let brief = String(responseText[briefRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var textWithoutTag = responseText
+        textWithoutTag.removeSubrange(fullTagRange)
+        return (textWithoutTag, brief.isEmpty ? nil : brief)
     }
 
     /// The concept from [CONCEPT:words], normalized ("Determinants." →

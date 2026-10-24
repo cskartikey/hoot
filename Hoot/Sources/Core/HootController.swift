@@ -32,13 +32,25 @@ final class HootController: ObservableObject {
         case responding
     }
 
-    /// What the tutor asked the studio to animate, plus the context it needs.
+    /// Which pipeline draws the picture the tutor asked for.
+    enum ExplainerKind: Equatable {
+        /// `[VIDEO:brief]`: the studio renders a narrated Manim video (slow, rich).
+        case studioVideo
+        /// `[SKETCH:brief]`: the LLM writes one animated SVG page (seconds).
+        case sketch
+    }
+
+    /// What the tutor asked to have drawn, plus the context it needs. The
+    /// name predates sketches; both kinds flow through the same request.
     struct ExplainerVideoRequest: Equatable {
         let question: String
         let brief: String
         let spokenAnswer: String
         /// Set when the question was asked over a paused YouTube video.
         var youTubeContext: StudioYouTubeContext? = nil
+        /// Defaults to the studio so older call sites (debug trigger, retries)
+        /// keep working unchanged.
+        var kind: ExplainerKind = .studioVideo
     }
 
     // MARK: Published state for the UI
@@ -156,9 +168,15 @@ final class HootController: ObservableObject {
     private var hasStarted = false
     private var cancellables: Set<AnyCancellable> = []
 
+    /// The model name the settings picked (or the default), read fresh so
+    /// other clients (the sketch client) use the same brain as the tutor.
+    static var storedSelectedModelName: String {
+        UserDefaults.standard.string(forKey: selectedModelDefaultsKey) ?? "claude-sonnet-5-5"
+    }
+
     init() {
         let userDefaults = UserDefaults.standard
-        let storedSelectedModel = userDefaults.string(forKey: Self.selectedModelDefaultsKey) ?? "claude-sonnet-5-5"
+        let storedSelectedModel = Self.storedSelectedModelName
         llmClient = LLMClient(workerBaseURL: Self.workerBaseURL, model: storedSelectedModel)
         selectedModel = storedSelectedModel
         if userDefaults.object(forKey: Self.cornerPetEnabledDefaultsKey) != nil {
@@ -495,9 +513,12 @@ final class HootController: ObservableObject {
             )
             guard isCurrentGeneration(pipelineGeneration) else { return }
 
-            // Pull out the [VIDEO:...] request first, then the pointing tag.
+            // Pull out the picture request ([SKETCH:...] or [VIDEO:...]) first,
+            // then the pointing tag from what is left.
             let spokenText = HootResponseTags.speakableText(from: fullResponseText)
             let explainerVideoParseResult = HootResponseTags.parseExplainerVideoRequest(from: fullResponseText)
+            let sketchParseResult = HootResponseTags.parseSketchRequest(from: explainerVideoParseResult.textWithoutVideoTag)
+            let responseTextWithoutPictureTags = sketchParseResult.textWithoutSketchTag
             let recentQuestionSourceDescription = youTubeContextForExplainerVideo?.title
                 ?? NSWorkspace.shared.frontmostApplication?.localizedName
 
@@ -537,19 +558,27 @@ final class HootController: ObservableObject {
                 )
             }
 
-            if let explainerVideoBrief = explainerVideoParseResult.explainerVideoBrief {
-                print("🎬 Explainer video requested: \(explainerVideoBrief)")
+            // The prompt says never both; if the tutor does it anyway the sketch
+            // wins, because it is on screen in seconds and the demo can't wait.
+            let pictureRequest: (brief: String, kind: ExplainerKind)? = {
+                if let sketchBrief = sketchParseResult.sketchBrief { return (sketchBrief, .sketch) }
+                if let explainerVideoBrief = explainerVideoParseResult.explainerVideoBrief { return (explainerVideoBrief, .studioVideo) }
+                return nil
+            }()
+            if let pictureRequest {
+                print(pictureRequest.kind == .sketch ? "✏️ Sketch requested: \(pictureRequest.brief)" : "🎬 Explainer video requested: \(pictureRequest.brief)")
                 didRequestExplainerVideo = true
                 memoryEntryIdForMostRecentExplainerVideoRequest = rememberedEntryId
                 latestExplainerVideoRequest = ExplainerVideoRequest(
                     question: questionText,
-                    brief: explainerVideoBrief,
+                    brief: pictureRequest.brief,
                     spokenAnswer: spokenText.trimmingCharacters(in: .whitespacesAndNewlines),
-                    youTubeContext: youTubeContextForExplainerVideo
+                    youTubeContext: youTubeContextForExplainerVideo,
+                    kind: pictureRequest.kind
                 )
             }
 
-            if let pointingTarget = HootResponseTags.parsePointingTarget(from: explainerVideoParseResult.textWithoutVideoTag),
+            if let pointingTarget = HootResponseTags.parsePointingTarget(from: responseTextWithoutPictureTags),
                let resolvedPointingLocation = HootResponseTags.resolvePointingTarget(pointingTarget, capturedScreens: capturedScreens) {
                 // Frame and label first, so an observer of the location sees
                 // all three already set.
