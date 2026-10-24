@@ -1,14 +1,11 @@
 //
-//  MemoryInterfaces.swift
+//  MemoryCore.swift
 //  Hoot
 //
 //  SKELETON — the shared surface of hoot's memory (see docs/MEMORY.md).
-//  Three agents build against this at once:
-//    - memory core agent: MemoryStore, MemoryRecall, SpacedReview bodies
-//      (and may move types into their own files in Memory/)
-//    - panel agent: chips, replay, settings memory section (reads MemoryStore)
-//    - nudge agent: NudgeCenter body + corner nudge UI + triggers
-//  Keep names and signatures; you may add members.
+//  Owned by the memory core agent (may split into more files in Memory/).
+//  The panel and nudge agents build against these names and signatures;
+//  keep them, you may add members.
 //
 
 import Combine
@@ -110,41 +107,3 @@ enum MemoryRecall {
     }
 }
 
-// MARK: - Nudges
-
-/// A small bubble beside the corner hoot with up to two buttons.
-struct HootNudge: Identifiable {
-    enum Kind: String {
-        case reviewDue
-        case videoReadyWhileAway
-        case sameIdeaAsBefore
-    }
-
-    let id = UUID()
-    let kind: Kind
-    let message: String
-    /// Words in `message` to emphasize (e.g. the concept or video title).
-    var emphasizedPhrase: String? = nil
-    let primaryButtonTitle: String
-    let primaryAction: () -> Void
-    let secondaryButtonTitle: String
-    var secondaryAction: () -> Void = {}
-}
-
-@MainActor
-final class NudgeCenter: ObservableObject {
-    static let shared = NudgeCenter()
-
-    /// The nudge on screen right now, if any.
-    @Published private(set) var currentNudge: HootNudge?
-    /// Settings toggle; persisted.
-    @Published var areNudgesEnabled = true
-
-    /// Shows the nudge if the etiquette rules allow it (rate limit, not
-    /// typing, not fullscreen, not while hoot is answering). Returns whether
-    /// it was shown.
-    @discardableResult
-    func postNudgeIfAllowed(_ nudge: HootNudge) -> Bool { false }
-
-    func dismissCurrentNudge(wasIgnored: Bool) {}
-}

@@ -191,6 +191,18 @@ final class ExplainerPanelManager: ObservableObject {
     /// question can resume.
     var onExplainerPanelClosed: (() -> Void)?
 
+    // MARK: - Memory hooks (SKELETON — owned by the panel agent)
+
+    /// Called with the finished video's URL whenever a studio job completes,
+    /// so memory can attach it to the question that asked for it.
+    var onFinishedVideoReady: ((String) -> Void)?
+    /// Called when a video finishes after the user closed the panel mid-render
+    /// (url, title), so a corner nudge can offer it.
+    var onVideoReadyWhileClosed: ((String, String) -> Void)?
+
+    /// Opens the panel straight into playback of a saved video.
+    func playSavedVideo(url: String, title: String) {}
+
     func close() {
         onExplainerPanelClosed?()
         cancelActiveJobAndPlayback()
