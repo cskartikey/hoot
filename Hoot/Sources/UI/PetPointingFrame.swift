@@ -35,6 +35,11 @@ struct PetPointingFrameView: View {
     static let tabInsetFromFrameLeft: CGFloat = 8
     /// The tab's visible part above the frame (its bottom 2pt overlap the top edge).
     static let tabVisibleHeightAboveFrame: CGFloat = 16
+    /// Transparent room around the frame for the tab (above or below) and a
+    /// tab that overhangs to the right. `.drawingGroup()` clips to the view's
+    /// bounds, so the tab must be inside them or it disappears.
+    static let roomForTabAboveAndBelow: CGFloat = 18
+    static let roomForTabOverhangOnRight: CGFloat = 220
 
     /// Element box + 4pt padding each side, at least 28×24, at most the screen minus 8pt margins.
     static func paddedFrameSize(forElementSize elementSize: CGSize?, screenSize: CGSize) -> CGSize {
@@ -94,6 +99,11 @@ struct PetPointingFrameView: View {
             }
         }
         .frame(width: frameWidth + Self.depthEdgeOutset, height: frameHeight + Self.depthEdgeOutset, alignment: .topLeading)
+        // Make room for the tab inside the drawing group's bounds; callers
+        // place this view `roomForTabAboveAndBelow` above the frame's top.
+        .padding(.top, Self.roomForTabAboveAndBelow)
+        .padding(.bottom, Self.roomForTabAboveAndBelow)
+        .padding(.trailing, Self.roomForTabOverhangOnRight)
         // Keeps the 2pt pixels crisp.
         .drawingGroup()
     }

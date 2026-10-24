@@ -129,7 +129,8 @@ struct PetOverlayScreenView: View {
                 theme: theme
             )
             .opacity(petOverlayCoordinator.pointingFrameOpacity)
-            .offset(x: frameOrigin.x, y: frameOrigin.y - (isTabBelowFrame ? 0 : 0))
+            // The view carries transparent room for the tab above the frame.
+            .offset(x: frameOrigin.x, y: frameOrigin.y - PetPointingFrameView.roomForTabAboveAndBelow)
         }
     }
 
