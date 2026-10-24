@@ -1,0 +1,46 @@
+# Generates Hoot.xcodeproj:  xcodegen generate
+name: Hoot
+options:
+  bundleIdPrefix: dev.cskartikey
+  deploymentTarget:
+    macOS: "14.2"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    DEVELOPMENT_TEAM: W237VB3H3F
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  Hoot:
+    type: application
+    platform: macOS
+    sources:
+      - path: Hoot/Sources
+      - path: Hoot/Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cskartikey.hoot
+        PRODUCT_NAME: Hoot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    entitlements:
+      path: Hoot/Hoot.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.automation.apple-events: true
+        com.apple.security.device.audio-input: true
+        com.apple.security.network.client: true
+    info:
+      path: Hoot/Info.plist
+      properties:
+        CFBundleDisplayName: hoot
+        LSUIElement: true
+        NSMicrophoneUsageDescription: hoot listens while you hold ⌃⌥ so you can ask out loud.
+        NSScreenCaptureUsageDescription: hoot looks at your screen only while you hold ⌃⌥, so it can see what you're asking about.
+        NSAppleEventsUsageDescription: hoot talks to your browser's YouTube player so it can see which part of a video you're asking about, and pauses it while you ask.

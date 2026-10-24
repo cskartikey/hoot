@@ -1,0 +1,513 @@
+//
+//  ExplainerPanelManager.swift
+//  Hoot
+//
+//  Owns the floating explainer-video panel that appears bottom-right when the
+//  tutor decides a picture would help ([VIDEO:brief] tag). Starts a studio job,
+//  publishes live progress (which of script / voice / animate / stitch is
+//  running, the video title) for ExplainerPanelView, and once the video is
+//  ready drives an AVPlayer plus synced captions, play/pause and the scrubber.
+//
+//  Uses the same borderless, non-activating NSPanel pattern as
+//  the menu bar and overlay panels so it floats above every app, joins all
+//  Spaces, and never steals focus from whatever the user is learning in.
+//  ScreenCapturer already excludes every window owned by this
+//  app, so the panel never shows up in the screenshots sent to Claude.
+//
+//  The panel window is sized to fit the SwiftUI content (the card, plus the
+//  pet perched above it while the video plays, plus room for the soft
+//  shadow). Fully transparent pixels of a non-opaque borderless window let
+//  clicks through to the app below, and the window is kept tight around the
+//  card so the transparent margin stays small.
+//
+
+import AppKit
+import AVFoundation
+import Combine
+import SwiftUI
+
+/// Where the explainer panel is in its lifecycle.
+enum ExplainerPanelPhase: Equatable {
+    case generatingVideo
+    case playingVideo(StudioFinishedVideo)
+    case failed(friendlyErrorMessage: String)
+}
+
+/// The four segments of the rendering progress bar. The studio sends stage
+/// events for script, voice and render; it sends no event for the final mux
+/// ("stitch"), so the view estimates when animating has turned into stitching.
+enum ExplainerProgressStep: Int, CaseIterable {
+    case script
+    case voice
+    case animate
+    case stitch
+
+    /// Label under the progress segment.
+    var segmentLabel: String {
+        switch self {
+        case .script: return "script"
+        case .voice: return "voice"
+        case .animate: return "animate"
+        case .stitch: return "stitch"
+        }
+    }
+
+    /// Typical seconds each step takes, from the studio's job.json timings
+    /// (script ~11s, voice ~1s, scene code + render ~33s, mux ~2–4s).
+    /// Drives the ETA countdown and the partial fill of the active segment.
+    var typicalDurationInSeconds: Double {
+        switch self {
+        case .script: return 11
+        case .voice: return 1.5
+        case .animate: return 33
+        case .stitch: return 3
+        }
+    }
+}
+
+@MainActor
+final class ExplainerPanelManager: ObservableObject {
+
+    // MARK: - Published state for ExplainerPanelView
+
+    @Published private(set) var explainerPanelPhase: ExplainerPanelPhase = .generatingVideo
+    @Published private(set) var currentQuestionText: String = ""
+    /// Title from the studio's `script` event; nil until the script is written.
+    @Published private(set) var studioScriptTitleText: String?
+
+    /// The latest step the studio reported, and when it started. The view
+    /// combines these with the clock for the ETA and the active segment fill.
+    @Published private(set) var latestReportedProgressStep: ExplainerProgressStep = .script
+    @Published private(set) var latestReportedProgressStepStartedDate: Date = Date()
+    /// 1 for the first render; 2+ while the studio is fixing a broken scene.
+    @Published private(set) var currentRenderAttemptNumber: Int = 1
+    /// True until the studio's first stage event arrives (the POST is in flight).
+    @Published private(set) var isWaitingForFirstStudioStage: Bool = true
+
+    @Published private(set) var explainerVideoPlayer: AVPlayer?
+    @Published private(set) var currentCaptionText: String?
+    @Published private(set) var hasVideoFinishedPlaying: Bool = false
+    @Published private(set) var isVideoPlaying: Bool = false
+    @Published private(set) var currentPlaybackTimeInSeconds: Double = 0
+    @Published private(set) var finishedVideoDurationInSeconds: Double = 0
+    /// Local-only bookmark toggle for the current video (not persisted yet).
+    @Published private(set) var isCurrentVideoBookmarked: Bool = false
+
+    // MARK: - Layout
+
+    static let explainerCardWidth: CGFloat = 318
+    /// How far above the card's top edge the 96pt pet sprite starts. The
+    /// design perches the pet so its feet overlap the card's top border.
+    static let presentingPetOverhangAboveCard: CGFloat = 82
+    static let presentingPetInsetFromCardLeadingEdge: CGFloat = 22
+    /// Transparent room around the card so its soft shadow (y 16, blur 24)
+    /// renders instead of being clipped by the window edge.
+    static let shadowPaddingOnSides: CGFloat = 28
+    static let shadowPaddingAboveCard: CGFloat = 12
+    static let shadowPaddingBelowCard: CGFloat = 40
+    static var explainerPanelWindowWidth: CGFloat {
+        explainerCardWidth + shadowPaddingOnSides * 2
+    }
+    private let marginFromScreenEdge: CGFloat = 16
+
+    // MARK: - Private state
+
+    private let studioClient = StudioClient()
+    private var explainerPanel: NSPanel?
+    private var activeStudioJobTask: Task<Void, Never>?
+    private var localEscapeKeyMonitor: Any?
+    private var globalEscapeKeyMonitor: Any?
+    private var playbackTimeObserverToken: Any?
+    private var playbackEndedObserver: NSObjectProtocol?
+    private var finishedVideoCaptions: [StudioCaption] = []
+    private var mostRecentExplainerVideoRequest: HootController.ExplainerVideoRequest?
+    private var themeAppearanceCancellable: AnyCancellable?
+
+    private static let escapeKeyCode: UInt16 = 53
+
+    init() {
+        // Keep the panel's NSAppearance in step with the theme so the
+        // `.ultraThinMaterial` behind the glass tint matches light/dark.
+        // `$theme` fires before the store's value changes, so use the new value.
+        themeAppearanceCancellable = WaitWhatThemeStore.shared.$theme
+            .sink { [weak self] newTheme in
+                self?.explainerPanel?.appearance = NSAppearance(named: newTheme.isDark ? .darkAqua : .aqua)
+            }
+    }
+
+    // MARK: - Public API
+
+    /// Shows the panel (creating it on first use) and starts a fresh studio
+    /// job. Any job already in flight is cancelled so only the newest
+    /// question's video is shown.
+    func showAndGenerate(request explainerVideoRequest: HootController.ExplainerVideoRequest) {
+        cancelActiveJobAndPlayback()
+        mostRecentExplainerVideoRequest = explainerVideoRequest
+
+        currentQuestionText = explainerVideoRequest.question
+        studioScriptTitleText = nil
+        latestReportedProgressStep = .script
+        latestReportedProgressStepStartedDate = Date()
+        currentRenderAttemptNumber = 1
+        isWaitingForFirstStudioStage = true
+        currentCaptionText = nil
+        hasVideoFinishedPlaying = false
+        isVideoPlaying = false
+        currentPlaybackTimeInSeconds = 0
+        finishedVideoDurationInSeconds = 0
+        isCurrentVideoBookmarked = false
+        explainerPanelPhase = .generatingVideo
+
+        showPanelAtBottomRightOfMouseScreen()
+        installEscapeKeyMonitors()
+
+        // Captured now (not when the request lands) so it reflects the app the
+        // user was in when they asked, e.g. "Google Chrome" for a YouTube lecture.
+        let frontmostApplicationName = NSWorkspace.shared.frontmostApplication?.localizedName
+
+        let explainRequestBody = StudioExplainRequestBody(
+            question: explainerVideoRequest.question,
+            brief: explainerVideoRequest.brief,
+            spokenAnswer: explainerVideoRequest.spokenAnswer,
+            context: StudioExplainContext(app: frontmostApplicationName, youtube: explainerVideoRequest.youTubeContext, screenText: nil),
+            memory: []
+        )
+
+        activeStudioJobTask = Task { [weak self] in
+            await self?.runStudioJob(explainRequestBody: explainRequestBody)
+        }
+    }
+
+    /// Called after the panel closes, so the YouTube video paused for the
+    /// question can resume.
+    var onExplainerPanelClosed: (() -> Void)?
+
+    func close() {
+        onExplainerPanelClosed?()
+        cancelActiveJobAndPlayback()
+        removeEscapeKeyMonitors()
+        explainerPanel?.orderOut(nil)
+    }
+
+    /// "try again" from the error state: rerun the same request.
+    func retryMostRecentRequest() {
+        guard let mostRecentExplainerVideoRequest else { return }
+        showAndGenerate(request: mostRecentExplainerVideoRequest)
+    }
+
+    func replayExplainerVideo() {
+        guard let explainerVideoPlayer else { return }
+        hasVideoFinishedPlaying = false
+        currentPlaybackTimeInSeconds = 0
+        explainerVideoPlayer.seek(to: .zero)
+        explainerVideoPlayer.play()
+        isVideoPlaying = true
+    }
+
+    /// The play/pause control: pauses, resumes, or replays once finished.
+    func togglePlayPauseOrReplay() {
+        guard let explainerVideoPlayer else { return }
+        if hasVideoFinishedPlaying {
+            replayExplainerVideo()
+        } else if isVideoPlaying {
+            explainerVideoPlayer.pause()
+            isVideoPlaying = false
+        } else {
+            explainerVideoPlayer.play()
+            isVideoPlaying = true
+        }
+    }
+
+    func toggleCurrentVideoBookmark() {
+        isCurrentVideoBookmarked.toggle()
+    }
+
+    /// Called by the view whenever its laid-out size changes. Resizes the
+    /// window to fit while keeping its bottom-right corner where it is, so
+    /// the card stays anchored to the screen corner (or wherever the user
+    /// dragged it) as it grows for the perched pet or a longer caption.
+    func resizePanelToFitContent(contentHeight: CGFloat) {
+        guard contentHeight > 0 else { return }
+        // Never resize the window from inside SwiftUI's layout pass: setFrame
+        // there triggers another layout pass, and with animated content the
+        // two can feed each other until AppKit throws "more Update Constraints
+        // in Window passes than there are views". Remember the latest height
+        // and apply it once, after the current pass, rounded to whole points.
+        pendingPanelContentHeight = contentHeight.rounded(.up)
+        guard !isPanelResizeScheduled else { return }
+        isPanelResizeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.applyPendingPanelResize()
+        }
+    }
+
+    private var pendingPanelContentHeight: CGFloat?
+    private var isPanelResizeScheduled = false
+
+    private func applyPendingPanelResize() {
+        isPanelResizeScheduled = false
+        guard let explainerPanel, let pendingPanelContentHeight else { return }
+        self.pendingPanelContentHeight = nil
+        let currentPanelFrame = explainerPanel.frame
+        guard abs(currentPanelFrame.height - pendingPanelContentHeight) >= 1 else { return }
+        let resizedPanelFrame = NSRect(
+            x: currentPanelFrame.maxX - Self.explainerPanelWindowWidth,
+            y: currentPanelFrame.minY,
+            width: Self.explainerPanelWindowWidth,
+            height: pendingPanelContentHeight
+        )
+        explainerPanel.setFrame(resizedPanelFrame, display: true, animate: false)
+    }
+
+    // MARK: - Studio job
+
+    private func runStudioJob(explainRequestBody: StudioExplainRequestBody) async {
+        do {
+            let studioJobId = try await studioClient.startExplainerJob(explainRequestBody: explainRequestBody)
+            print("🎬 Studio job started: \(studioJobId)")
+
+            for try await studioJobEvent in studioClient.streamJobEvents(jobId: studioJobId) {
+                if Task.isCancelled { return }
+                handleStudioJobEvent(studioJobEvent)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            if Task.isCancelled { return }
+            print("⚠️ Studio job failed: \(error)")
+            explainerPanelPhase = .failed(friendlyErrorMessage: Self.friendlyErrorMessage(for: error))
+        }
+    }
+
+    private func handleStudioJobEvent(_ studioJobEvent: StudioJobEvent) {
+        switch studioJobEvent {
+        case .stage(let stageUpdate):
+            handleStudioStageUpdate(stageUpdate)
+        case .script(let studioScript):
+            if let studioScriptTitle = studioScript.title, !studioScriptTitle.isEmpty {
+                studioScriptTitleText = studioScriptTitle
+            }
+        case .done(let finishedVideo):
+            startPlayback(finishedVideo: finishedVideo)
+        case .error(let studioErrorMessage):
+            print("⚠️ Studio reported error: \(studioErrorMessage)")
+            explainerPanelPhase = .failed(friendlyErrorMessage: "i couldn't finish that animation this time. ask me again and i'll take another shot.")
+        }
+    }
+
+    /// Maps the studio's stage names onto the four progress segments:
+    /// `script` → script, `voice` → voice, `render` (any attempt) → animate.
+    /// Stitch has no event; the view switches to it once animating has run
+    /// about as long as a render usually takes.
+    private func handleStudioStageUpdate(_ stageUpdate: StudioStageUpdate) {
+        let reportedProgressStep: ExplainerProgressStep
+        switch stageUpdate.stage {
+        case "script":
+            reportedProgressStep = .script
+        case "voice":
+            reportedProgressStep = .voice
+        case "render":
+            reportedProgressStep = .animate
+            currentRenderAttemptNumber = stageUpdate.attempt ?? 1
+        default:
+            print("🎬 Unknown studio stage: \(stageUpdate.stage)")
+            return
+        }
+        isWaitingForFirstStudioStage = false
+        latestReportedProgressStep = reportedProgressStep
+        latestReportedProgressStepStartedDate = Date()
+    }
+
+    private static func friendlyErrorMessage(for error: Error) -> String {
+        if let urlError = error as? URLError,
+           urlError.code == .cannotConnectToHost || urlError.code == .cannotFindHost {
+            return "the video studio isn't running right now, so i can't draw this one."
+        }
+        return "something went wrong while making the video. ask me again in a moment."
+    }
+
+    // MARK: - Playback
+
+    private func startPlayback(finishedVideo: StudioFinishedVideo) {
+        guard let finishedVideoURL = URL(string: finishedVideo.url) else {
+            explainerPanelPhase = .failed(friendlyErrorMessage: "the video came back in a shape i can't play.")
+            return
+        }
+
+        finishedVideoCaptions = finishedVideo.captions
+        finishedVideoDurationInSeconds = finishedVideo.duration
+        currentPlaybackTimeInSeconds = 0
+        let newExplainerVideoPlayer = AVPlayer(url: finishedVideoURL)
+
+        // Poll playback time ~10x/second for the scrubber, the time label and
+        // whichever caption covers it. Captions are rendered by the panel
+        // (not burned into the video) so they stay crisp at any size.
+        playbackTimeObserverToken = newExplainerVideoPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] currentPlaybackTime in
+            // Delivered on the main queue, so we are already on the main actor.
+            MainActor.assumeIsolated {
+                self?.updatePlaybackProgress(playbackTimeInSeconds: currentPlaybackTime.seconds)
+            }
+        }
+
+        playbackEndedObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: newExplainerVideoPlayer.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.hasVideoFinishedPlaying = true
+                self.isVideoPlaying = false
+                self.currentPlaybackTimeInSeconds = self.finishedVideoDurationInSeconds
+            }
+        }
+
+        explainerVideoPlayer = newExplainerVideoPlayer
+        // Start with the first caption so the caption line is never empty.
+        currentCaptionText = finishedVideoCaptions.first?.text
+        explainerPanelPhase = .playingVideo(finishedVideo)
+        newExplainerVideoPlayer.play()
+        isVideoPlaying = true
+    }
+
+    private func updatePlaybackProgress(playbackTimeInSeconds: Double) {
+        guard playbackTimeInSeconds.isFinite else { return }
+        if !hasVideoFinishedPlaying {
+            currentPlaybackTimeInSeconds = playbackTimeInSeconds
+        }
+
+        // Between captions (and after the last one) keep the previous line
+        // up rather than flashing an empty caption area.
+        let activeCaption = finishedVideoCaptions.first { caption in
+            caption.start <= playbackTimeInSeconds && playbackTimeInSeconds < caption.end
+        }
+        if let activeCaption, currentCaptionText != activeCaption.text {
+            currentCaptionText = activeCaption.text
+        }
+    }
+
+    private func cancelActiveJobAndPlayback() {
+        activeStudioJobTask?.cancel()
+        activeStudioJobTask = nil
+
+        if let explainerVideoPlayer {
+            explainerVideoPlayer.pause()
+            if let playbackTimeObserverToken {
+                explainerVideoPlayer.removeTimeObserver(playbackTimeObserverToken)
+            }
+        }
+        playbackTimeObserverToken = nil
+        if let playbackEndedObserver {
+            NotificationCenter.default.removeObserver(playbackEndedObserver)
+        }
+        playbackEndedObserver = nil
+
+        explainerVideoPlayer = nil
+        isVideoPlaying = false
+        finishedVideoCaptions = []
+    }
+
+    // MARK: - Panel
+
+    private func showPanelAtBottomRightOfMouseScreen() {
+        if explainerPanel == nil {
+            createExplainerPanel()
+        }
+        guard let explainerPanel else { return }
+
+        let mouseLocation = NSEvent.mouseLocation
+        let screenWithMouse = NSScreen.screens.first { screen in
+            screen.frame.contains(mouseLocation)
+        } ?? NSScreen.main
+
+        if let visibleFrameOfScreenWithMouse = screenWithMouse?.visibleFrame {
+            let panelSize = explainerPanel.frame.size
+            // The shadow padding is transparent, so subtract it to put the
+            // visible card (not the invisible panel edge) near the screen corner.
+            let panelOriginX = visibleFrameOfScreenWithMouse.maxX - panelSize.width
+                - marginFromScreenEdge + Self.shadowPaddingOnSides
+            let panelOriginY = visibleFrameOfScreenWithMouse.minY
+                + marginFromScreenEdge - Self.shadowPaddingBelowCard
+            explainerPanel.setFrameOrigin(NSPoint(x: panelOriginX, y: panelOriginY))
+        }
+
+        explainerPanel.appearance = WaitWhatThemeStore.shared.nsAppearance
+
+        // orderFrontRegardless (not makeKeyAndOrderFront) so the panel appears
+        // without taking keyboard focus away from the user's app.
+        explainerPanel.orderFrontRegardless()
+    }
+
+    private func createExplainerPanel() {
+        let panelWidth = Self.explainerPanelWindowWidth
+        // A first guess at the rendering state's height; the view reports its
+        // real height right after layout and the panel resizes to fit.
+        let initialPanelHeight: CGFloat = 320
+
+        let hostingView = NSHostingView(rootView: ExplainerPanelView(explainerPanelManager: self))
+        // The panel size is driven by resizePanelToFitContent, not by Auto
+        // Layout constraints from the SwiftUI content.
+        hostingView.sizingOptions = []
+        hostingView.frame = NSRect(x: 0, y: 0, width: panelWidth, height: initialPanelHeight)
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+
+        let newExplainerPanel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: initialPanelHeight),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        newExplainerPanel.isFloatingPanel = true
+        newExplainerPanel.level = .floating
+        newExplainerPanel.isOpaque = false
+        newExplainerPanel.backgroundColor = .clear
+        // The SwiftUI card draws its own soft shadow; the window shadow would
+        // outline the transparent padding as a hard rectangle.
+        newExplainerPanel.hasShadow = false
+        newExplainerPanel.hidesOnDeactivate = false
+        newExplainerPanel.isExcludedFromWindowsMenu = true
+        newExplainerPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        newExplainerPanel.isMovableByWindowBackground = true
+        newExplainerPanel.appearance = WaitWhatThemeStore.shared.nsAppearance
+        newExplainerPanel.contentView = hostingView
+
+        explainerPanel = newExplainerPanel
+    }
+
+    // MARK: - Escape key
+
+    /// The local monitor handles Esc when our app happens to be active; the
+    /// global monitor handles it while the user is in another app (the normal
+    /// case, since the panel is non-activating). Global key monitoring relies
+    /// on the Accessibility permission the app already requests.
+    private func installEscapeKeyMonitors() {
+        removeEscapeKeyMonitors()
+
+        localEscapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] keyDownEvent in
+            guard keyDownEvent.keyCode == Self.escapeKeyCode else { return keyDownEvent }
+            Task { @MainActor in self?.close() }
+            return nil
+        }
+
+        globalEscapeKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] keyDownEvent in
+            guard keyDownEvent.keyCode == Self.escapeKeyCode else { return }
+            Task { @MainActor in self?.close() }
+        }
+    }
+
+    private func removeEscapeKeyMonitors() {
+        if let localEscapeKeyMonitor {
+            NSEvent.removeMonitor(localEscapeKeyMonitor)
+        }
+        localEscapeKeyMonitor = nil
+        if let globalEscapeKeyMonitor {
+            NSEvent.removeMonitor(globalEscapeKeyMonitor)
+        }
+        globalEscapeKeyMonitor = nil
+    }
+}

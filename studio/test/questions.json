@@ -1,0 +1,37 @@
+[
+  {
+    "name": "determinants",
+    "question": "wait, why does the determinant being zero mean space gets squished?",
+    "brief": "Show a 2D grid with a highlighted unit square; apply a matrix with determinant 2 and show the square's area doubling; then apply a matrix whose determinant is 0 so the whole grid flattens onto a line and the square's area goes to zero",
+    "spokenAnswer": "Okay, so the determinant tells you how much a transformation stretches or shrinks area. If it's zero, every square gets flattened to nothing, so the whole plane collapses onto a line.",
+    "context": { "app": "Google Chrome", "youtube": { "videoId": "Ip3X9LOh2dk", "title": "The determinant | Chapter 6, Essence of linear algebra", "t": 412.3 } }
+  },
+  {
+    "name": "backprop",
+    "question": "how does backprop actually know which weight to change?",
+    "brief": "A tiny network: input, one hidden neuron, output, loss. Forward pass left to right with numbers, then the error flows backwards along the same arrows, multiplying local slopes (chain rule) to get each weight's gradient; the weight with the biggest gradient gets nudged most",
+    "spokenAnswer": "Backprop works backwards from the error. Each weight gets blamed in proportion to how much nudging it would change the loss, and the chain rule lets you compute that by multiplying slopes along the path.",
+    "context": { "app": "Google Chrome", "youtube": { "title": "What is backpropagation really doing? | Chapter 3, Deep learning", "t": 300 } }
+  },
+  {
+    "name": "recursion",
+    "question": "I don't get how factorial calls itself and still returns the right number",
+    "brief": "Show factorial(n) code on the left; on the right, a call stack of frames fact(3), fact(2), fact(1), fact(0) pushing up one by one; then base case returns 1 and frames pop off one by one, each multiplying, until 6 comes out",
+    "spokenAnswer": "Each call waits for the smaller call to finish. They stack up until n hits zero, then the answers come back down the stack, multiplying as they go.",
+    "context": { "app": "Visual Studio Code", "screenText": "def fact(n):\n    if n == 0:\n        return 1\n    return n * fact(n - 1)" }
+  },
+  {
+    "name": "fourier",
+    "question": "how can adding sine waves make a square wave?",
+    "brief": "On axes, draw a square wave target in faint grey; add sine terms one at a time: sin(x), then + sin(3x)/3, then + sin(5x)/5, + sin(7x)/7, showing the running sum in mint getting closer to the square wave each time",
+    "spokenAnswer": "Each extra sine wave fixes part of the error. Add the odd harmonics with shrinking sizes and the sum gets flatter on top and steeper at the edges, which is a square wave.",
+    "context": { "app": "Google Chrome", "youtube": { "title": "But what is a Fourier series?", "t": 640 } }
+  },
+  {
+    "name": "tcp",
+    "question": "why does TCP need three messages to start a connection?",
+    "brief": "Client and server boxes on left and right with timelines going down; SYN arrow client to server with seq=100, SYN-ACK back with seq=300 ack=101, ACK client to server with ack=301; then both sides show 'connected'. Emphasise each side proving it can send and receive",
+    "spokenAnswer": "Both sides need to know the other can send and receive. The first two messages prove that for the client, and the third proves it for the server.",
+    "context": { "app": "Google Chrome", "screenText": "TCP three-way handshake: SYN, SYN-ACK, ACK" }
+  }
+]

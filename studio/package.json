@@ -1,0 +1,22 @@
+{
+  "name": "studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Explainer-video service: question -> narrated Manim animation",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "start": "tsx src/server.ts",
+    "setup:manim": "cd manim && uv sync",
+    "test:questions": "tsx test/run.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
