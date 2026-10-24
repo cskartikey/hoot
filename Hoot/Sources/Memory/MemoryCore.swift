@@ -146,6 +146,9 @@ struct ConceptReview: Codable, Identifiable, Equatable {
     /// Nil once the concept has climbed past the end of the ladder.
     var nextReviewAt: Date?
     var lastReviewResult: ReviewResult?
+    /// When `lastReviewResult` was graded (the remembers window shows it as
+    /// "shaky · oct 22"). Nil for reviews graded before this was stored.
+    var lastReviewedAt: Date?
     /// Generated lazily when the review comes due.
     var cachedReviewQuestion: String?
 }
@@ -369,6 +372,7 @@ final class MemoryStore: ObservableObject {
             conceptReview.nextReviewAt = SpacedReviewSchedule.interval(forStage: 0).map { now.addingTimeInterval($0) }
         }
         conceptReview.lastReviewResult = reviewResult
+        conceptReview.lastReviewedAt = now
         // Next time, a different question about the same idea.
         conceptReview.cachedReviewQuestion = nil
 

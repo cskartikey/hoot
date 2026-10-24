@@ -254,8 +254,18 @@ struct MenuPanelHomeView: View {
                         isTopConcept: conceptIndex == 0,
                         isActiveFilter: activeConceptFilter == conceptReview.concept,
                         theme: theme,
-                        onTap: { toggleConceptFilter(conceptReview.concept) }
+                        onTap: {
+                            // ⌥-click opens the idea in the remembers window.
+                            if NSEvent.modifierFlags.contains(.option) {
+                                RemembersWindowController.shared.show(hootController: hootController, focusingConcept: conceptReview.concept)
+                            } else {
+                                toggleConceptFilter(conceptReview.concept)
+                            }
+                        }
                     )
+                }
+                RemembersSeeAllChip(theme: theme) {
+                    RemembersWindowController.shared.show(hootController: hootController)
                 }
             }
             .padding(.horizontal, 8)

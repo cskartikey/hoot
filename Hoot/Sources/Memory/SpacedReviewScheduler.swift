@@ -168,7 +168,7 @@ final class SpacedReviewScheduler {
     /// One short, text-only call: a spoken-friendly recall question built
     /// from the concept and what hoot said about it. Falls back to a plain
     /// question if the brain is unreachable, so a review is never lost.
-    private static func generateReviewQuestion(forConcept concept: String, model: String) async -> String? {
+    static func generateReviewQuestion(forConcept concept: String, model: String) async -> String? {
         let savedEntries = MemoryStore.shared.entries(forConcept: concept).prefix(3)
         guard !savedEntries.isEmpty else { return nil }
 
