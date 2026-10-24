@@ -412,6 +412,15 @@ private struct ExplainerPlayingStateView: View {
                 .background(Capsule().fill(theme.foreground(opacity: 0.05)))
 
             ExplainerControlIconButton(
+                systemImageName: "arrow.up.left.and.arrow.down.right",
+                iconPointSize: 15,
+                iconColor: theme.muted,
+                accessibilityLabel: "Open the video big"
+            ) {
+                explainerPanelManager.openExplainerVideoInLargeWindow()
+            }
+
+            ExplainerControlIconButton(
                 systemImageName: explainerPanelManager.isCurrentVideoBookmarked ? "bookmark.fill" : "bookmark",
                 iconPointSize: 18,
                 iconColor: explainerPanelManager.isCurrentVideoBookmarked ? theme.accent : theme.muted,

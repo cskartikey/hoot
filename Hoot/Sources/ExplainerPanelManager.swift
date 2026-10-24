@@ -23,6 +23,7 @@
 
 import AppKit
 import AVFoundation
+import AVKit
 import Combine
 import SwiftUI
 
@@ -85,6 +86,10 @@ final class ExplainerPanelManager: ObservableObject {
     @Published private(set) var isWaitingForFirstStudioStage: Bool = true
 
     @Published private(set) var explainerVideoPlayer: AVPlayer?
+    /// The finished video's address, for opening it in the large window.
+    private var currentFinishedVideoURL: URL?
+    private var largeExplainerVideoWindow: NSWindow?
+    private var currentVideoTitleForLargeWindow = "hoot"
     @Published private(set) var currentCaptionText: String?
     @Published private(set) var hasVideoFinishedPlaying: Bool = false
     @Published private(set) var isVideoPlaying: Bool = false
@@ -218,6 +223,47 @@ final class ExplainerPanelManager: ObservableObject {
         }
     }
 
+    /// Opens the current video in a big, resizable window with standard
+    /// controls (including fullscreen), continuing from where the panel was.
+    func openExplainerVideoInLargeWindow() {
+        guard let currentFinishedVideoURL else { return }
+        let resumeTime = explainerVideoPlayer?.currentTime() ?? .zero
+        explainerVideoPlayer?.pause()
+        isVideoPlaying = false
+
+        let largeVideoPlayer = AVPlayer(url: currentFinishedVideoURL)
+        largeVideoPlayer.seek(to: resumeTime)
+
+        let largePlayerView = AVPlayerView()
+        largePlayerView.player = largeVideoPlayer
+        largePlayerView.controlsStyle = .floating
+        largePlayerView.showsFullScreenToggleButton = true
+
+        let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let windowWidth = min(1120, visibleFrame.width * 0.8)
+        let windowContentRect = NSRect(x: 0, y: 0, width: windowWidth, height: windowWidth * 9 / 16)
+
+        let largeVideoWindow = largeExplainerVideoWindow ?? NSWindow(
+            contentRect: windowContentRect,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        largeVideoWindow.isReleasedWhenClosed = false
+        largeVideoWindow.title = currentVideoTitleForLargeWindow
+        largeVideoWindow.contentAspectRatio = NSSize(width: 16, height: 9)
+        largeVideoWindow.contentView = largePlayerView
+        largeVideoWindow.setContentSize(windowContentRect.size)
+        largeVideoWindow.center()
+        largeExplainerVideoWindow = largeVideoWindow
+
+        // A menu-bar app has to activate to put a normal window in front.
+        NSApp.activate(ignoringOtherApps: true)
+        largeVideoWindow.makeKeyAndOrderFront(nil)
+        largeVideoPlayer.play()
+    }
+
     func toggleCurrentVideoBookmark() {
         isCurrentVideoBookmarked.toggle()
     }
@@ -285,6 +331,7 @@ final class ExplainerPanelManager: ObservableObject {
             handleStudioStageUpdate(stageUpdate)
         case .script(let studioScript):
             if let studioScriptTitle = studioScript.title, !studioScriptTitle.isEmpty {
+                currentVideoTitleForLargeWindow = studioScriptTitle.lowercased()
                 studioScriptTitleText = studioScriptTitle
             }
         case .done(let finishedVideo):
@@ -334,6 +381,7 @@ final class ExplainerPanelManager: ObservableObject {
             return
         }
 
+        currentFinishedVideoURL = finishedVideoURL
         finishedVideoCaptions = finishedVideo.captions
         finishedVideoDurationInSeconds = finishedVideo.duration
         currentPlaybackTimeInSeconds = 0
