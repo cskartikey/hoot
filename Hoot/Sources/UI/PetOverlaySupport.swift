@@ -23,16 +23,21 @@ enum PetOverlayAnswerText {
     static func displayableText(fromStreamedResponseText streamedResponseText: String) -> String {
         var remainingText = streamedResponseText
 
-        while let videoTagOpeningRange = remainingText.range(of: "[VIDEO:"),
-              let videoTagClosingRange = remainingText.range(
-                of: "]",
-                range: videoTagOpeningRange.upperBound..<remainingText.endIndex
-              ) {
-            remainingText.removeSubrange(videoTagOpeningRange.lowerBound..<videoTagClosingRange.upperBound)
+        // A picture request ([VIDEO:] or [SKETCH:]) can arrive mid-stream with
+        // spoken text after it, so a complete one is cut out rather than
+        // hiding everything that follows.
+        for pictureTagOpening in ["[VIDEO:", "[SKETCH:"] {
+            while let pictureTagOpeningRange = remainingText.range(of: pictureTagOpening),
+                  let pictureTagClosingRange = remainingText.range(
+                    of: "]",
+                    range: pictureTagOpeningRange.upperBound..<remainingText.endIndex
+                  ) {
+                remainingText.removeSubrange(pictureTagOpeningRange.lowerBound..<pictureTagClosingRange.upperBound)
+            }
         }
 
-        // A POINT tag, or a VIDEO tag whose "]" has not arrived yet, hides the rest.
-        for tagOpening in ["[POINT:", "[VIDEO:", "[CONCEPT:", "[REVIEW:", "[CHECK:", "[PREDICT"] {
+        // A POINT tag, or a VIDEO/SKETCH tag whose "]" has not arrived yet, hides the rest.
+        for tagOpening in ["[POINT:", "[VIDEO:", "[SKETCH:", "[CONCEPT:", "[REVIEW:", "[CHECK:", "[PREDICT"] {
             if let tagOpeningRange = remainingText.range(of: tagOpening) {
                 remainingText = String(remainingText[..<tagOpeningRange.lowerBound])
             }

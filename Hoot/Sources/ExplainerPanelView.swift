@@ -9,6 +9,8 @@
 //    - playing: chrome-less video with an accent scrubber, synced caption,
 //      and a controls row (play/pause, time, "follow up ⌃⌥" hint, bookmark),
 //      with the pet perched on the card's top edge in its presenting state
+//    - sketch: the animated SVG page in a web view, the question as the
+//      caption, and a controls row ("draw again", follow-up hint, big window)
 //    - failed: a short friendly message with "try again"
 //  Every color comes from WaitWhatThemeStore so light/dark and the mascot's
 //  accents apply live.
@@ -23,9 +25,9 @@ struct ExplainerPanelView: View {
 
     @State private var isHoveringCard = false
 
+    /// Video playing or sketch showing: the pet perches on the card.
     private var isPlayingPhase: Bool {
-        if case .playingVideo = explainerPanelManager.explainerPanelPhase { return true }
-        return false
+        explainerPanelManager.explainerPanelPhase.isShowingAPicture
     }
 
     var body: some View {
@@ -70,6 +72,13 @@ struct ExplainerPanelView: View {
             case .playingVideo:
                 ExplainerPlayingStateView(explainerPanelManager: explainerPanelManager, theme: theme)
                     .transition(.opacity)
+            case .showingSketch(let finishedSketch):
+                ExplainerSketchShowingStateView(
+                    explainerPanelManager: explainerPanelManager,
+                    finishedSketch: finishedSketch,
+                    theme: theme
+                )
+                .transition(.opacity)
             case .failed(let friendlyErrorMessage):
                 ExplainerFailedStateView(
                     friendlyErrorMessage: friendlyErrorMessage,
@@ -138,27 +147,48 @@ private struct ExplainerRenderingStateView: View {
                         .monospacedDigit()
                 }
 
-                VStack(spacing: 6) {
-                    HStack(spacing: 4) {
-                        ForEach(ExplainerProgressStep.allCases, id: \.rawValue) { progressStep in
-                            ExplainerProgressSegment(
-                                fillFraction: segmentFillFraction(
-                                    for: progressStep,
-                                    activeProgressStep: renderingProgress.activeProgressStep,
-                                    activeStepFillFraction: renderingProgress.activeStepFillFraction
-                                ),
-                                isActiveSegment: progressStep == renderingProgress.activeProgressStep,
-                                theme: theme
-                            )
+                if explainerPanelManager.isActiveJobASketch {
+                    // A sketch is one call: a single segment filling over the
+                    // typical wait, in place of the studio's four stages.
+                    VStack(spacing: 6) {
+                        ExplainerProgressSegment(
+                            fillFraction: renderingProgress.activeStepFillFraction,
+                            isActiveSegment: true,
+                            theme: theme
+                        )
+                        HStack(spacing: 0) {
+                            Text("sketch")
+                                .font(.jetBrainsMono(10.5))
+                                .foregroundColor(theme.ink)
+                            Spacer(minLength: 0)
+                            Text("quick, no narration")
+                                .font(.jetBrainsMono(10.5))
+                                .foregroundColor(theme.faint)
                         }
                     }
+                } else {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 4) {
+                            ForEach(ExplainerProgressStep.allCases, id: \.rawValue) { progressStep in
+                                ExplainerProgressSegment(
+                                    fillFraction: segmentFillFraction(
+                                        for: progressStep,
+                                        activeProgressStep: renderingProgress.activeProgressStep,
+                                        activeStepFillFraction: renderingProgress.activeStepFillFraction
+                                    ),
+                                    isActiveSegment: progressStep == renderingProgress.activeProgressStep,
+                                    theme: theme
+                                )
+                            }
+                        }
 
-                    HStack(spacing: 0) {
-                        ForEach(ExplainerProgressStep.allCases, id: \.rawValue) { progressStep in
-                            if progressStep != .script { Spacer(minLength: 0) }
-                            Text(progressStep.segmentLabel)
-                                .font(.jetBrainsMono(10.5))
-                                .foregroundColor(progressStep == renderingProgress.activeProgressStep ? theme.ink : theme.faint)
+                        HStack(spacing: 0) {
+                            ForEach(ExplainerProgressStep.allCases, id: \.rawValue) { progressStep in
+                                if progressStep != .script { Spacer(minLength: 0) }
+                                Text(progressStep.segmentLabel)
+                                    .font(.jetBrainsMono(10.5))
+                                    .foregroundColor(progressStep == renderingProgress.activeProgressStep ? theme.ink : theme.faint)
+                            }
                         }
                     }
                 }
@@ -169,7 +199,10 @@ private struct ExplainerRenderingStateView: View {
     /// The studio's title once the script exists, otherwise the question.
     private var explainerTitleText: String {
         let titleText = explainerPanelManager.studioScriptTitleText ?? explainerPanelManager.currentQuestionText
-        return titleText.isEmpty ? "making you a video" : titleText.lowercased()
+        if titleText.isEmpty {
+            return explainerPanelManager.isActiveJobASketch ? "sketching this out" : "making you a video"
+        }
+        return titleText.lowercased()
     }
 
     private struct EstimatedRenderingProgress {
@@ -183,6 +216,9 @@ private struct ExplainerRenderingStateView: View {
     /// The studio emits no event for the final mux, so once animating has run
     /// about as long as a render usually takes, we show "stitch" as active.
     private func estimatedRenderingProgress(at currentDate: Date) -> EstimatedRenderingProgress {
+        if explainerPanelManager.isActiveJobASketch {
+            return estimatedSketchProgress(at: currentDate)
+        }
         let isFixingAnimation = explainerPanelManager.currentRenderAttemptNumber > 1
         // A fix round is one LLM call plus one render, a bit faster than the first pass.
         let expectedAnimateDurationInSeconds: Double = isFixingAnimation ? 22 : ExplainerProgressStep.animate.typicalDurationInSeconds
@@ -228,6 +264,23 @@ private struct ExplainerRenderingStateView: View {
             activeStepFillFraction: activeStepFillFraction,
             stagePillText: stagePillText,
             etaText: etaText
+        )
+    }
+
+    /// A sketch has no stage events: the fill and ETA come from the clock
+    /// against the typical wait. Past the estimate the pill says so rather
+    /// than inventing a countdown.
+    private func estimatedSketchProgress(at currentDate: Date) -> EstimatedRenderingProgress {
+        let typicalSketchDuration = ExplainerPanelManager.typicalSketchDurationInSeconds
+        let secondsElapsed = max(0, currentDate.timeIntervalSince(explainerPanelManager.sketchJobStartedDate))
+        let fillFraction = min(0.92, max(0.06, secondsElapsed / typicalSketchDuration))
+        let secondsRemaining = Int((typicalSketchDuration - secondsElapsed).rounded(.up))
+        let isPastEstimate = secondsElapsed > typicalSketchDuration
+        return EstimatedRenderingProgress(
+            activeProgressStep: .script,
+            activeStepFillFraction: fillFraction,
+            stagePillText: isPastEstimate ? "almost there" : "sketching",
+            etaText: isPastEstimate ? "almost" : "~\(max(1, secondsRemaining))s"
         )
     }
 
@@ -487,6 +540,97 @@ private struct ExplainerPlayingStateView: View {
     private static func formattedPlaybackTime(_ timeInSeconds: Double) -> String {
         let wholeSeconds = timeInSeconds.isFinite ? max(0, Int(timeInSeconds.rounded(.down))) : 0
         return String(format: "%d:%02d", wholeSeconds / 60, wholeSeconds % 60)
+    }
+}
+
+// MARK: - Sketch state
+
+/// The finished sketch on the card: the web view where the video would be,
+/// the question as the caption, and a controls row. No scrubber or time,
+/// since the page loops on its own.
+private struct ExplainerSketchShowingStateView: View {
+    @ObservedObject var explainerPanelManager: ExplainerPanelManager
+    let finishedSketch: ExplainerFinishedSketch
+    let theme: WaitWhatTheme
+
+    /// Matches the video state's reserved caption height so the card is the
+    /// same size whichever kind of picture it holds.
+    private let reservedCaptionHeight: CGFloat = 41
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                // A faint paper tint behind the transparent page, so the
+                // sketch reads as a framed picture rather than floating text.
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(theme.foreground(opacity: 0.04))
+                ExplainerSketchView(sketchFileURL: finishedSketch.fileURL)
+                    .padding(6)
+            }
+            .frame(height: 210)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(theme.foreground(opacity: 0.10), lineWidth: 1)
+            )
+
+            Text(explainerPanelManager.currentCaptionText ?? finishedSketch.question.lowercased())
+                .font(.system(size: 14))
+                .lineSpacing(3.5)
+                .foregroundColor(theme.ink)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: reservedCaptionHeight, alignment: .topLeading)
+
+            controlsRow
+        }
+    }
+
+    private var controlsRow: some View {
+        HStack(spacing: 8) {
+            // Sketches are cheap: redrawing is the natural "not quite" fix.
+            ExplainerControlIconButton(
+                systemImageName: "arrow.counterclockwise.circle.fill",
+                iconPointSize: 22,
+                iconColor: theme.ink,
+                accessibilityLabel: "Draw it again"
+            ) {
+                explainerPanelManager.retryMostRecentRequest()
+            }
+
+            Text("sketch")
+                .font(.jetBrainsMono(11))
+                .foregroundColor(theme.muted)
+
+            Spacer(minLength: 4)
+
+            // A hint, not a button: holding ⌃⌥ is how you follow up.
+            Text("follow up ⌃⌥")
+                .font(.jetBrainsMono(11, weight: .medium))
+                .foregroundColor(theme.ink)
+                .lineLimit(1)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .background(Capsule().fill(theme.foreground(opacity: 0.05)))
+
+            ExplainerControlIconButton(
+                systemImageName: "arrow.up.left.and.arrow.down.right",
+                iconPointSize: 15,
+                iconColor: theme.muted,
+                accessibilityLabel: "Open the sketch big"
+            ) {
+                explainerPanelManager.openExplainerVideoInLargeWindow()
+            }
+
+            ExplainerControlIconButton(
+                systemImageName: explainerPanelManager.isCurrentVideoBookmarked ? "bookmark.fill" : "bookmark",
+                iconPointSize: 18,
+                iconColor: explainerPanelManager.isCurrentVideoBookmarked ? theme.accent : theme.muted,
+                accessibilityLabel: explainerPanelManager.isCurrentVideoBookmarked ? "Remove bookmark" : "Bookmark"
+            ) {
+                explainerPanelManager.toggleCurrentVideoBookmark()
+            }
+        }
     }
 }
 

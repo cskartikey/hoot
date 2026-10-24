@@ -132,6 +132,58 @@ final class LLMClient {
         }
     }
 
+    /// One plain, non-streaming text request: system prompt + one user
+    /// message, no images, the reply's text blocks joined. Used for sketches,
+    /// which need the whole page at once rather than sentence by sentence.
+    /// The worker answers `stream: false` with the Anthropic JSON shape
+    /// (`content: [{type: "text", text}]`) whichever brain is behind it.
+    func requestPlainTextAnswer(
+        systemPrompt: String,
+        userPrompt: String,
+        maximumOutputTokens requestedMaximumOutputTokens: Int,
+        secondsToWaitForWholeAnswer: TimeInterval = 90
+    ) async throws -> String {
+        let chatURLString = "\(workerBaseURL)/chat"
+        guard let chatURL = URL(string: chatURLString) else {
+            throw LLMClientError.invalidWorkerURL(chatURLString)
+        }
+
+        var chatRequest = URLRequest(url: chatURL)
+        chatRequest.httpMethod = "POST"
+        chatRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        chatRequest.setValue("application/json", forHTTPHeaderField: "accept")
+        // A few thousand tokens of markup can take a while to write; this is
+        // the only limit on the whole call, so it is generous.
+        chatRequest.timeoutInterval = secondsToWaitForWholeAnswer
+        chatRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "max_tokens": requestedMaximumOutputTokens,
+            "stream": false,
+            "system": systemPrompt,
+            "messages": [["role": "user", "content": userPrompt]],
+        ] as [String: Any])
+
+        let (responseBodyData, urlResponse) = try await urlSession.data(for: chatRequest)
+        let statusCode = (urlResponse as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(statusCode) else {
+            let responseBody = String(data: responseBodyData, encoding: .utf8) ?? "<\(responseBodyData.count) non-UTF-8 bytes>"
+            throw LLMClientError.httpError(statusCode: statusCode, responseBody: responseBody)
+        }
+
+        guard let responsePayload = try? JSONSerialization.jsonObject(with: responseBodyData) as? [String: Any] else {
+            throw LLMClientError.streamReportedError("the reply wasn't JSON")
+        }
+        if let errorDetails = responsePayload["error"] as? [String: Any] {
+            throw LLMClientError.streamReportedError(errorDetails["message"] as? String ?? "unknown error")
+        }
+        let contentBlocks = responsePayload["content"] as? [[String: Any]] ?? []
+        let replyText = contentBlocks
+            .filter { $0["type"] as? String == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        return replyText
+    }
+
     private func readStreamingAnswer(
         for chatRequest: URLRequest,
         streamActivityTracker: StreamActivityTracker,

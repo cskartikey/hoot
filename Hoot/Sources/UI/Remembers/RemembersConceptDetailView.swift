@@ -213,8 +213,15 @@ struct RemembersConceptDetailView: View {
         let symbolName: String
         let symbolColor: Color
         if hasPlayableVideo {
-            titleText = isPlaying ? "playing" : "replay video"
-            symbolName = isPlaying ? "waveform" : "play.fill"
+            // Saved sketches sit in the same slot as videos, as .html files.
+            let isSavedSketch = memoryEntry.explainerVideoURL?.lowercased().hasSuffix(".html") ?? false
+            if isSavedSketch {
+                titleText = isPlaying ? "showing" : "show sketch"
+                symbolName = isPlaying ? "pencil.and.outline" : "pencil"
+            } else {
+                titleText = isPlaying ? "playing" : "replay video"
+                symbolName = isPlaying ? "waveform" : "play.fill"
+            }
             symbolColor = theme.accent2
         } else {
             titleText = isAnswerExpanded ? "hide answer" : "read answer"

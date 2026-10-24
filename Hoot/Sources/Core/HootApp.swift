@@ -85,12 +85,11 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // The panel has its own pet perched on it while the video plays, so
-        // the overlay pet steps aside to avoid two pets on screen.
+        // The panel has its own pet perched on it while a video plays or a
+        // sketch shows, so the overlay pet steps aside to avoid two pets.
         explainerPanelManager.$explainerPanelPhase
             .map { explainerPanelPhase -> Bool in
-                if case .playingVideo = explainerPanelPhase { return true }
-                return false
+                explainerPanelPhase.isShowingAPicture
             }
             .removeDuplicates()
             .sink { [weak hootController] isPlayingVideo in

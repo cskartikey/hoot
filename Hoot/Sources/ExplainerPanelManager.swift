@@ -2,11 +2,14 @@
 //  ExplainerPanelManager.swift
 //  Hoot
 //
-//  Owns the floating explainer-video panel that appears bottom-right when the
-//  tutor decides a picture would help ([VIDEO:brief] tag). Starts a studio job,
-//  publishes live progress (which of script / voice / animate / stitch is
-//  running, the video title) for ExplainerPanelView, and once the video is
-//  ready drives an AVPlayer plus synced captions, play/pause and the scrubber.
+//  Owns the floating explainer panel that appears bottom-right when the
+//  tutor decides a picture would help. Two kinds of picture share it:
+//    - [VIDEO:brief]: a studio job (narrated Manim video). Publishes live
+//      progress (which of script / voice / animate / stitch is running, the
+//      video title) for ExplainerPanelView, and once the video is ready
+//      drives an AVPlayer plus synced captions, play/pause and the scrubber.
+//    - [SKETCH:brief]: one LLM call for an animated SVG page, shown in a
+//      web view within seconds (ExplainerSketchClient / ExplainerSketchView).
 //
 //  Uses the same borderless, non-activating NSPanel pattern as
 //  the menu bar and overlay panels so it floats above every app, joins all
@@ -27,11 +30,21 @@ import AVKit
 import Combine
 import SwiftUI
 
-/// Where the explainer panel is in its lifecycle.
+/// Where the explainer panel is in its lifecycle. `generatingVideo` covers
+/// both kinds of job (see `isActiveJobASketch` for which).
 enum ExplainerPanelPhase: Equatable {
     case generatingVideo
     case playingVideo(StudioFinishedVideo)
+    case showingSketch(ExplainerFinishedSketch)
     case failed(friendlyErrorMessage: String)
+
+    /// True while a finished picture (either kind) is on the card.
+    var isShowingAPicture: Bool {
+        switch self {
+        case .playingVideo, .showingSketch: return true
+        case .generatingVideo, .failed: return false
+        }
+    }
 }
 
 /// The four segments of the rendering progress bar. The studio sends stage
@@ -84,6 +97,13 @@ final class ExplainerPanelManager: ObservableObject {
     @Published private(set) var currentRenderAttemptNumber: Int = 1
     /// True until the studio's first stage event arrives (the POST is in flight).
     @Published private(set) var isWaitingForFirstStudioStage: Bool = true
+    /// True while the job in the panel is a sketch (one LLM call) rather
+    /// than a studio video; the rendering view shows a different pill and ETA.
+    @Published private(set) var isActiveJobASketch: Bool = false
+    /// When the sketch call started, for the rendering view's ETA.
+    @Published private(set) var sketchJobStartedDate: Date = Date()
+    /// Typical wall time for a sketch (one ~2k-token reply), for the ETA.
+    static let typicalSketchDurationInSeconds: Double = 12
 
     @Published private(set) var explainerVideoPlayer: AVPlayer?
     /// The finished video's address, for opening it in the large window.
@@ -122,7 +142,10 @@ final class ExplainerPanelManager: ObservableObject {
     // MARK: - Private state
 
     private let studioClient = StudioClient()
+    private let sketchClient = ExplainerSketchClient()
     private var explainerPanel: NSPanel?
+    /// The job the panel is showing progress for: a studio job or a sketch
+    /// call (the name predates sketches; both use the same slot).
     private var activeStudioJobTask: Task<Void, Never>?
     private var localEscapeKeyMonitor: Any?
     private var globalEscapeKeyMonitor: Any?
@@ -185,10 +208,19 @@ final class ExplainerPanelManager: ObservableObject {
         currentPlaybackTimeInSeconds = 0
         finishedVideoDurationInSeconds = 0
         isCurrentVideoBookmarked = false
+        isActiveJobASketch = explainerVideoRequest.kind == .sketch
+        sketchJobStartedDate = Date()
         explainerPanelPhase = .generatingVideo
 
         showPanelAtBottomRightOfMouseScreen()
         installEscapeKeyMonitors()
+
+        if explainerVideoRequest.kind == .sketch {
+            activeStudioJobTask = Task { [weak self] in
+                await self?.runSketchJob(request: explainerVideoRequest)
+            }
+            return
+        }
 
         // Captured now (not when the request lands) so it reflects the app the
         // user was in when they asked, e.g. "Google Chrome" for a YouTube lecture.
@@ -226,6 +258,12 @@ final class ExplainerPanelManager: ObservableObject {
     /// is still rendering keeps going in the background and is offered
     /// through `onVideoReadyWhileClosed` when it finishes.
     func playSavedVideo(url savedVideoURLString: String, title savedVideoTitle: String) {
+        // Saved sketches share the memory slot with saved videos; the file
+        // type tells them apart.
+        if let savedURL = URL(string: savedVideoURLString), savedURL.pathExtension.lowercased() == "html" {
+            showSavedSketch(fileURL: savedURL, title: savedVideoTitle)
+            return
+        }
         moveRenderingJobToBackgroundIfAny()
         stopPlayback()
         stopLargeWindowPlayback()
@@ -310,6 +348,10 @@ final class ExplainerPanelManager: ObservableObject {
     /// Opens the current video in a big, resizable window with standard
     /// controls (including fullscreen), continuing from where the panel was.
     func openExplainerVideoInLargeWindow() {
+        if case .showingSketch(let finishedSketch) = explainerPanelPhase {
+            openSketchInLargeWindow(finishedSketch)
+            return
+        }
         guard let currentFinishedVideoURL else { return }
         let resumeTime = explainerVideoPlayer?.currentTime() ?? .zero
         explainerVideoPlayer?.pause()
@@ -359,6 +401,44 @@ final class ExplainerPanelManager: ObservableObject {
         largeVideoPlayer.play()
     }
 
+    /// The same big window the video player uses, holding a second web
+    /// view on the sketch page over a theme-colored background (the card's
+    /// glass isn't there to show through).
+    private func openSketchInLargeWindow(_ finishedSketch: ExplainerFinishedSketch) {
+        stopLargeWindowPlayback()
+
+        let theme = WaitWhatThemeStore.shared.theme
+        let largeSketchHostingView = NSHostingView(rootView:
+            ExplainerSketchView(sketchFileURL: finishedSketch.fileURL)
+                .padding(24)
+                .background(theme.pageBackground)
+        )
+
+        let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let windowWidth = min(1120, visibleFrame.width * 0.8)
+        let windowContentRect = NSRect(x: 0, y: 0, width: windowWidth, height: windowWidth * 9 / 16)
+
+        let largeSketchWindow = largeExplainerVideoWindow ?? NSWindow(
+            contentRect: windowContentRect,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        largeSketchWindow.isReleasedWhenClosed = false
+        largeSketchWindow.title = currentVideoTitleForLargeWindow
+        largeSketchWindow.contentAspectRatio = NSSize(width: 16, height: 9)
+        // The page's prefers-color-scheme follows the window's appearance.
+        largeSketchWindow.appearance = WaitWhatThemeStore.shared.nsAppearance
+        largeSketchWindow.contentView = largeSketchHostingView
+        largeSketchWindow.setContentSize(windowContentRect.size)
+        largeSketchWindow.center()
+        largeExplainerVideoWindow = largeSketchWindow
+
+        NSApp.activate(ignoringOtherApps: true)
+        largeSketchWindow.makeKeyAndOrderFront(nil)
+    }
+
     private func stopLargeWindowPlayback() {
         largeExplainerVideoPlayer?.pause()
         largeExplainerVideoPlayer = nil
@@ -404,6 +484,79 @@ final class ExplainerPanelManager: ObservableObject {
             height: pendingPanelContentHeight
         )
         explainerPanel.setFrame(resizedPanelFrame, display: true, animate: false)
+    }
+
+    // MARK: - Sketch job
+
+    /// One LLM call (with one retry inside the client), then the page goes
+    /// on the card. Mirrors `runStudioJob` for the background / failure
+    /// bookkeeping so closing the panel mid-sketch behaves the same way.
+    private func runSketchJob(request sketchRequest: HootController.ExplainerVideoRequest) async {
+        do {
+            let finishedSketch = try await sketchClient.makeSketch(
+                brief: sketchRequest.brief,
+                question: sketchRequest.question,
+                spokenAnswer: sketchRequest.spokenAnswer
+            )
+            if Task.isCancelled { return }
+            onFinishedVideoReady?(finishedSketch.fileURL.absoluteString)
+            if isActiveJobRunningInBackground {
+                let finishedSketchTitle = activeJobVideoTitle
+                finishBackgroundJob()
+                onVideoReadyWhileClosed?(finishedSketch.fileURL.absoluteString, finishedSketchTitle)
+                return
+            }
+            activeStudioJobTask = nil
+            showSketch(finishedSketch)
+        } catch is CancellationError {
+            return
+        } catch {
+            if Task.isCancelled { return }
+            print("⚠️ Sketch failed: \(error)")
+            if isActiveJobRunningInBackground {
+                finishBackgroundJob()
+                return
+            }
+            explainerPanelPhase = .failed(friendlyErrorMessage: Self.friendlySketchErrorMessage(for: error))
+        }
+    }
+
+    /// Puts a finished sketch on the card. The caption line (which videos
+    /// use for synced captions) shows the question the sketch answers.
+    private func showSketch(_ finishedSketch: ExplainerFinishedSketch) {
+        stopPlayback()
+        currentFinishedVideoURL = nil
+        currentVideoTitleForLargeWindow = finishedSketch.question.lowercased()
+        currentCaptionText = finishedSketch.question.lowercased()
+        hasVideoFinishedPlaying = false
+        explainerPanelPhase = .showingSketch(finishedSketch)
+    }
+
+    /// A saved sketch from memory or a "ready while you were away" nudge:
+    /// straight onto the card, like `playSavedVideo` for videos.
+    private func showSavedSketch(fileURL savedSketchFileURL: URL, title savedSketchTitle: String) {
+        moveRenderingJobToBackgroundIfAny()
+        stopPlayback()
+        stopLargeWindowPlayback()
+
+        currentQuestionText = savedSketchTitle
+        studioScriptTitleText = savedSketchTitle
+        isCurrentVideoBookmarked = false
+        showSketch(ExplainerFinishedSketch(fileURL: savedSketchFileURL, question: savedSketchTitle, brief: ""))
+
+        showPanelAtBottomRightOfMouseScreen()
+        installEscapeKeyMonitors()
+    }
+
+    private static func friendlySketchErrorMessage(for error: Error) -> String {
+        if let urlError = error as? URLError,
+           urlError.code == .cannotConnectToHost || urlError.code == .cannotFindHost {
+            return "hoot's worker isn't running right now, so i can't draw this one."
+        }
+        if error is ExplainerSketchError {
+            return "my sketch came out wrong twice in a row. ask me again and i'll take another shot."
+        }
+        return "something went wrong while sketching. ask me again in a moment."
     }
 
     // MARK: - Studio job
