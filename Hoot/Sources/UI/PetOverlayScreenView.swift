@@ -53,6 +53,17 @@ struct PetOverlayScreenView: View {
 
             pointingRing(theme: theme)
 
+            // The tutor's marks over the pointed thing, revealed one by one
+            // once the frame is up and faded out with it. Always in the
+            // tree so its reveal clock survives re-renders.
+            PetAnnotationLayerView(
+                screenFrame: screenFrame,
+                annotations: hootController.screenAnnotations,
+                isPointingFrameShown: petOverlayCoordinator.isPointingRingShown && petOverlayCoordinator.pointingFrameOpacity > 0,
+                pointingFrameOpacity: petOverlayCoordinator.pointingFrameOpacity,
+                theme: theme
+            )
+
             if isPetNearThisScreen {
                 // The fade animation sits above `.position` so showing or
                 // hiding the corner hoot never animates where it is.

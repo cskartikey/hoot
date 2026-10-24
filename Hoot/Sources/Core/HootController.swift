@@ -59,6 +59,10 @@ final class HootController: ObservableObject {
     @Published private(set) var detectedElementLabel: String?
     /// The element's size in points when the tutor boxed it; nil = unknown.
     @Published private(set) var detectedElementBoxSize: CGSize?
+    /// Marks from [DRAW:] tags (global coordinates), revealed over the
+    /// pointed thing while hoot talks. Only ever set together with a pointing
+    /// target and cleared with it, so they never outlive the frame.
+    @Published private(set) var screenAnnotations: [HootResolvedAnnotation] = []
 
     @Published var latestExplainerVideoRequest: ExplainerVideoRequest?
     /// The memory saved for the most recent question that asked for an
@@ -238,6 +242,7 @@ final class HootController: ObservableObject {
         detectedElementDisplayFrame = nil
         detectedElementLabel = nil
         detectedElementBoxSize = nil
+        screenAnnotations = []
     }
 
     // MARK: - Voice input wiring
@@ -551,6 +556,15 @@ final class HootController: ObservableObject {
                 detectedElementDisplayFrame = resolvedPointingLocation.displayFrame
                 detectedElementLabel = pointingTarget.label
                 detectedElementBoxSize = resolvedPointingLocation.globalBoxSize
+                // Marks share the frame's lifetime, so they are published only
+                // when there is a frame for them to sit beside.
+                screenAnnotations = HootResponseTags.resolveAnnotations(
+                    HootResponseTags.parseAnnotations(from: explainerVideoParseResult.textWithoutVideoTag),
+                    capturedScreens: capturedScreens
+                )
+                if !screenAnnotations.isEmpty {
+                    print("✏️ Drawing \(screenAnnotations.count) mark(s) over the pointed thing")
+                }
                 detectedElementScreenLocation = resolvedPointingLocation.globalLocation
             }
 
