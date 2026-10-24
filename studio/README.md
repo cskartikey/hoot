@@ -105,6 +105,16 @@ Free tier: the Developer plan allows 3 indexes, and local queries are never mete
 
 Tuning: `pnpm test:moss-memory` indexes six sample memories into a throwaway local session (it is never pushed) and prints, for each model and alpha, the score of the right memory and of the best wrong one for the same test questions the on-device blend was tuned on. Moss's `score` is the semantic similarity rescaled to 0–1, and `alpha` changes the hybrid *ranking* (which candidates come back and in what order), not the score. The thresholds are `MemoryRecall.minimumMossScore` (prompt context) and `minimumMossScoreForSameIdeaNudge` (the unprompted nudge).
 
+Results (Oct 24, 6 sample memories, 10 questions; every alpha gave the same ranking):
+
+| | right memory ranked #1 | related found at threshold | unrelated rejected | query time |
+|---|---|---|---|---|
+| on-device blend (NLEmbedding + keywords) | — | 5/7 (missed closures, "volume zero") | 4/4 at 0.50 | <1 ms |
+| Moss `moss-mediumlm` | 6/6 | 3/6 at 0.25 | 4/4 | ~2.8 ms |
+| **Moss `moss-minilm` (used)** | **6/6** | **4/6 at 0.40** (det-3d 0.65, variance 0.84, backprop 0.59, closures 0.54) | **4/4** (max 0.38) | **~2.3 ms** |
+
+Chosen: `moss-minilm`, `minimumMossScore` 0.40 for the tutor's context (the tutor makes the final call on whether it's really the same idea) and 0.55 for the unprompted "same idea" nudge. Misses (merge sort → big-O 0.07, "volume zero" → determinants 0.24) are paraphrases with no shared vocabulary.
+
 ## How sync works
 
 Each beat's slot is its narration length plus a short pause. The scene prompt gets the cumulative end times as `T = [...]`, and the generated code calls `wait_until(self, T[i])` at the end of every beat. `wait_until` pads with `self.wait` and records the scene time it actually reached. If a beat's animations run long, the mux places that beat's narration where the beat really starts instead of drifting, and the last frame is held if the audio runs past the video.

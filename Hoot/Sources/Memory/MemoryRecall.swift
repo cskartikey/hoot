@@ -31,11 +31,11 @@ enum MemoryRecall {
     /// harder paraphrases 0.43–0.45), unrelated ones at most 0.44.
     nonisolated static let defaultMinimumSimilarity: Float = 0.50
 
-    /// Moss score a memory needs to count as related (moss-mediumlm, picked
+    /// Moss score a memory needs to count as related (moss-minilm, picked
     /// with studio/test/moss-memory.ts; see studio/README.md "Moss").
-    nonisolated static let minimumMossScore: Float = 0.50
+    nonisolated static let minimumMossScore: Float = 0.40
     /// Stricter Moss score for the unprompted "same idea as before" nudge.
-    nonisolated static let minimumMossScoreForSameIdeaNudge: Float = 0.60
+    nonisolated static let minimumMossScoreForSameIdeaNudge: Float = 0.55
 
     private static let embeddingWeight: Float = 0.6
     private static let wordOverlapWeight: Float = 0.4

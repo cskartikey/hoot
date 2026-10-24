@@ -7,7 +7,7 @@
 // - On start, open a SESSION named after the index and pull the cloud index
 //   into it (`session.loadIndex`): no re-embedding, the prebuilt vectors load.
 // - New memories go into the session with `addDocs` (embedded in-process with
-//   moss-mediumlm, no network round trip) and are queryable at once.
+//   moss-minilm, no network round trip) and are queryable at once.
 // - Queries run against the session in process memory (~1-10 ms).
 // - The session is pushed to the cloud 30 s after the last change, and on
 //   shutdown, so memories survive a restart. A push REPLACES the cloud index,
@@ -22,7 +22,9 @@ export type MemoryHit = { id: string; score: number; concept?: string };
 
 /** Picked by test/moss-memory.ts; see the README "Moss" section. */
 export const DEFAULT_ALPHA = 0.8;
-const MODEL_ID = 'moss-mediumlm';
+// moss-minilm scored right matches higher than moss-mediumlm in test/moss-memory.ts
+// (closures 0.54 vs 0.35, det-3d 0.65 vs 0.38) with the same 6/6 top-1 ranking.
+const MODEL_ID = 'moss-minilm';
 const RETRY_OPEN_AFTER_MS = 30_000;
 
 export class MossMemoryIndex {
