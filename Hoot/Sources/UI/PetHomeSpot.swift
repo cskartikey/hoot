@@ -23,7 +23,7 @@ enum PetHomeSpot {
     /// Center of the dozing hoot in global (AppKit, +y up) coordinates.
     static func homeCenterInGlobalSpace() -> CGPoint {
         if let cachedDraggedHomeCenter,
-           let keptOnScreen = keptInsideSomeVisibleFrame(cachedDraggedHomeCenter) {
+           let keptOnScreen = keptOnSomeScreenBelowMenuBar(cachedDraggedHomeCenter) {
             return keptOnScreen
         }
         return defaultHomeCenterInGlobalSpace()
@@ -32,7 +32,7 @@ enum PetHomeSpot {
     /// While dragging only the in-memory spot moves; `persist` writes it once
     /// the drag ends.
     static func moveHome(toCenter newCenter: CGPoint, persist: Bool) {
-        cachedDraggedHomeCenter = keptInsideSomeVisibleFrame(newCenter) ?? newCenter
+        cachedDraggedHomeCenter = keptOnSomeScreenBelowMenuBar(newCenter) ?? newCenter
         guard persist, let cachedDraggedHomeCenter else { return }
         UserDefaults.standard.set(
             [Double(cachedDraggedHomeCenter.x), Double(cachedDraggedHomeCenter.y)],
@@ -66,17 +66,19 @@ enum PetHomeSpot {
         )
     }
 
-    /// Clamps the spot so the whole body stays inside the visible frame of
-    /// the screen it's on (clear of the menu bar and Dock). Nil when it's on
-    /// no screen at all, e.g. that display was unplugged; then hoot goes
-    /// back to the default corner rather than dozing off-screen.
-    private static func keptInsideSomeVisibleFrame(_ center: CGPoint) -> CGPoint? {
+    /// Clamps the spot so the whole body stays on the screen it's on and
+    /// below the menu bar. The Dock doesn't count as a limit: hoot draws
+    /// above it, and perching on the Dock is a fine place to doze. Nil when
+    /// it's on no screen at all, e.g. that display was unplugged; then hoot
+    /// goes back to the default corner rather than dozing off-screen.
+    private static func keptOnSomeScreenBelowMenuBar(_ center: CGPoint) -> CGPoint? {
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) else { return nil }
-        let visibleFrame = screen.visibleFrame
+        let screenFrame = screen.frame
+        let topBelowMenuBar = screen.visibleFrame.maxY
         let halfSide = PetOverlayCoordinator.fullBodySideLength / 2
         return CGPoint(
-            x: min(max(center.x, visibleFrame.minX + halfSide), visibleFrame.maxX - halfSide),
-            y: min(max(center.y, visibleFrame.minY + halfSide), visibleFrame.maxY - halfSide)
+            x: min(max(center.x, screenFrame.minX + halfSide), screenFrame.maxX - halfSide),
+            y: min(max(center.y, screenFrame.minY + halfSide), topBelowMenuBar - halfSide)
         )
     }
 
