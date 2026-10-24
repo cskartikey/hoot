@@ -50,6 +50,7 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         wireExplainerPanel(hootController: hootController, explainerPanelManager: explainerPanelManager)
+        wireMemory(hootController: hootController, explainerPanelManager: explainerPanelManager)
         showPetOverlaysOncePermissionsAreGranted(hootController: hootController)
 
         // Let the first permission poll land before deciding whether the
@@ -102,6 +103,39 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
             hootController.isExplainerVideoPlaying = false
             Task { await hootController.youTubeContextProvider.resumeVideoIfWePausedIt() }
         }
+    }
+
+    /// Memory: finished explainer videos are saved with the question that
+    /// asked for them, spaced review starts checking for due concepts, and
+    /// the nudge triggers that live outside the memory core are installed.
+    private func wireMemory(hootController: HootController, explainerPanelManager: ExplainerPanelManager) {
+        // The panel runs one studio job at a time and a new request replaces
+        // the old one, so a finished video belongs to the most recent
+        // question that asked for one.
+        explainerPanelManager.onFinishedVideoReady = { [weak hootController] finishedVideoURL in
+            guard let memoryEntryId = hootController?.memoryEntryIdForMostRecentExplainerVideoRequest else { return }
+            MemoryStore.shared.attachExplainerVideo(url: finishedVideoURL, toEntryWithId: memoryEntryId)
+        }
+
+        // A forgotten review whose concept has a saved animation: offer it.
+        // The review nudge was just on screen, so the rate limit would block
+        // this one; wait for it (a couple of minutes at most).
+        hootController.onReviewForgotWithSavedVideo = { [weak explainerPanelManager] memoryEntry in
+            guard let savedVideoURL = memoryEntry.explainerVideoURL else { return }
+            NudgeCenter.shared.postNudgeWhenAllowed(HootNudge(
+                kind: .reviewDue,
+                message: "want the \(memoryEntry.concept) animation again?",
+                emphasizedPhrase: memoryEntry.concept,
+                primaryButtonTitle: "play",
+                primaryAction: {
+                    explainerPanelManager?.playSavedVideo(url: savedVideoURL, title: memoryEntry.question)
+                },
+                secondaryButtonTitle: "no thanks"
+            ), givingUpAfterSeconds: 180)
+        }
+
+        SpacedReviewScheduler.shared.start(hootController: hootController)
+        NudgeTriggers.install(hootController: hootController, explainerPanelManager: explainerPanelManager)
     }
 
     /// The overlay needs screen recording + accessibility to be useful, so it

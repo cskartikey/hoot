@@ -7,6 +7,10 @@
 //    [POINT:x,y,w,h:label(:screenN)] → box the thing (top-left x,y + size)
 //    [POINT:x,y:label(:screenN)]   → older point form (center only)
 //    [POINT:none]                  → nothing to point at
+//    [CONCEPT:words]               → what to remember this question under
+//    [CONCEPT:none]                → chit-chat, don't remember
+//    [REVIEW:remembered|shaky|forgot] → the grade of a spaced-review answer
+//  None of them is ever spoken: speech stops at the first "[".
 //  and maps a point from screenshot pixels to AppKit global coordinates.
 //
 
@@ -61,6 +65,65 @@ enum HootResponseTags {
         var textWithoutVideoTag = responseText
         textWithoutVideoTag.removeSubrange(fullTagRange)
         return (textWithoutVideoTag, explainerVideoBrief)
+    }
+
+    /// The concept from [CONCEPT:words], normalized ("Determinants." →
+    /// "determinants"), or nil for [CONCEPT:none], a missing tag, or
+    /// something too long to be a concept name.
+    static func parseConcept(from responseText: String) -> String? {
+        guard let rawConcept = firstTagValue(named: "CONCEPT", in: responseText) else { return nil }
+        let normalizedConcept = MemoryStore.normalizedConcept(rawConcept)
+        let conceptWordCount = normalizedConcept.split(separator: " ").count
+        guard !normalizedConcept.isEmpty,
+              !["none", "n/a", "na", "nothing", "chit-chat", "chitchat"].contains(normalizedConcept),
+              conceptWordCount <= 5,
+              normalizedConcept.count <= 48 else { return nil }
+        return normalizedConcept
+    }
+
+    /// The grade from [REVIEW:remembered|shaky|forgot], or nil.
+    static func parseReviewResult(from responseText: String) -> ReviewResult? {
+        guard let rawReviewResult = firstTagValue(named: "REVIEW", in: responseText) else { return nil }
+        let normalizedReviewResult = rawReviewResult.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exactReviewResult = ReviewResult(rawValue: normalizedReviewResult) { return exactReviewResult }
+        // Tolerate small variations ("forgotten", "shaky-ish").
+        if normalizedReviewResult.hasPrefix("remember") { return .remembered }
+        if normalizedReviewResult.hasPrefix("shak") { return .shaky }
+        if normalizedReviewResult.hasPrefix("forg") { return .forgot }
+        return nil
+    }
+
+    /// The text inside the first [NAME:...] tag, case-insensitive on NAME.
+    private static func firstTagValue(named tagName: String, in responseText: String) -> String? {
+        let pattern = #"\["# + tagName + #"\s*:\s*([^\]]*)\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)),
+              let valueRange = Range(match.range(at: 1), in: responseText) else { return nil }
+        return String(responseText[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// First ~two sentences of the spoken answer, for the memory's summary.
+    static func answerSummary(fromSpokenText spokenText: String, maximumSentenceCount: Int = 2, maximumLength: Int = 280) -> String {
+        let trimmedSpokenText = spokenText
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var summary = ""
+        var sentenceCount = 0
+        var previousCharacter: Character?
+        for character in trimmedSpokenText {
+            // A sentence ends at . ! ? followed by whitespace.
+            if let previousCharacter, ".!?".contains(previousCharacter), character.isWhitespace {
+                sentenceCount += 1
+                if sentenceCount >= maximumSentenceCount { break }
+            }
+            summary.append(character)
+            previousCharacter = character
+        }
+        summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if summary.count > maximumLength {
+            summary = String(summary.prefix(maximumLength - 1)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return summary
     }
 
     /// Reads the last [POINT:...] tag in the response. Returns nil for

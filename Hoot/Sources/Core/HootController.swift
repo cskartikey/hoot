@@ -4,7 +4,8 @@
 //
 //  The coordinator: push-to-talk → screenshot (+ YouTube context) → LLM →
 //  streamed Cartesia speech, [POINT:] pointing, [VIDEO:] explainer
-//  requests, recent questions.
+//  requests, recent questions, memory ([CONCEPT:] capture, recall of past
+//  confusions into the prompt) and spaced-review turns ([REVIEW:]).
 //
 
 import AppKit
@@ -58,6 +59,22 @@ final class HootController: ObservableObject {
     @Published private(set) var detectedElementBoxSize: CGSize?
 
     @Published var latestExplainerVideoRequest: ExplainerVideoRequest?
+    /// The memory saved for the most recent question that asked for an
+    /// explainer video, so the finished video can be attached to it. Nil when
+    /// that question wasn't remembered (chit-chat).
+    private(set) var memoryEntryIdForMostRecentExplainerVideoRequest: UUID?
+
+    /// A spaced-review quick check the learner is answering. Set by
+    /// `beginReviewTurn` (or holding ⌃⌥ while a review nudge is up) and
+    /// consumed by the next question, which is graded instead of remembered.
+    struct ReviewTurn: Equatable {
+        let concept: String
+        let question: String
+    }
+    @Published private(set) var activeReviewTurn: ReviewTurn?
+    /// Called after a review answer graded "forgot" when the concept has a
+    /// saved explainer video, so the app can offer it again.
+    var onReviewForgotWithSavedVideo: ((MemoryEntry) -> Void)?
     /// Set by the app delegate from the explainer panel's phase.
     @Published var isExplainerVideoPlaying = false
 
@@ -85,6 +102,10 @@ final class HootController: ObservableObject {
     private static let cornerPetEnabledDefaultsKey = "hootCornerPetEnabled"
     private static let selectedModelDefaultsKey = "hootSelectedModel"
     private static let maximumConversationTurnsKept = 10
+    /// How long a hands-free review answer may take before we stop listening.
+    private static let secondsToListenForReviewAnswer: Double = 20
+    /// Transcript lines (the end of the window) used to look up related memories.
+    private static let transcriptLinesUsedForMemoryRecall = 3
 
     private var conversationHistory: [LLMClient.ConversationTurn] = []
     private var currentAnswerTask: Task<Void, Never>?
@@ -110,6 +131,12 @@ final class HootController: ObservableObject {
             isCornerPetEnabled = userDefaults.bool(forKey: Self.cornerPetEnabledDefaultsKey)
         }
         wireVoiceInput()
+
+        // "forget everything" also forgets this session's conversation.
+        NotificationCenter.default.publisher(for: .hootMemoryWasForgotten)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.conversationHistory = [] }
+            .store(in: &cancellables)
     }
 
     /// True while any sentence of the answer is queued or playing.
@@ -193,6 +220,15 @@ final class HootController: ObservableObject {
               !voiceInputController.isListening,
               !voiceInputController.isFinishingTranscript else { return }
         voiceState = .idle
+        // A review turn with no answer: try again a little later instead of
+        // grading silence.
+        if let unansweredReviewTurn = activeReviewTurn {
+            activeReviewTurn = nil
+            MemoryStore.shared.postponeReview(
+                forConcept: unansweredReviewTurn.concept,
+                bySeconds: SpacedReviewSchedule.laterPostponementInSeconds
+            )
+        }
         // Nothing was asked, so give the lecture back.
         Task { await youTubeContextProvider.resumeVideoIfWePausedIt() }
     }
@@ -203,6 +239,12 @@ final class HootController: ObservableObject {
         guard !isPushToTalkKeyHeld else { return }
         isPushToTalkKeyHeld = true
         NotificationCenter.default.post(name: .hootDismissMenuPanel, object: nil)
+
+        // Holding ⌃⌥ while a review nudge is up answers it.
+        if activeReviewTurn == nil, let offeredReview = SpacedReviewScheduler.shared.reviewOfferedByVisibleNudge() {
+            activeReviewTurn = ReviewTurn(concept: offeredReview.concept, question: offeredReview.question)
+            NudgeCenter.shared.dismissCurrentNudge(wasIgnored: false)
+        }
 
         // A new question interrupts whatever hoot was doing.
         cancelCurrentAnswerAndSpeech()
@@ -251,6 +293,9 @@ final class HootController: ObservableObject {
         cancelCurrentAnswerAndSpeech()
         let pipelineGeneration = answerGeneration
         let youTubePauseTaskForThisQuestion = currentQuestionYouTubePauseTask
+        // A review turn lasts exactly one answer.
+        let reviewTurnForThisQuestion = activeReviewTurn
+        activeReviewTurn = nil
 
         isAnswerPipelineRunning = true
         voiceState = .processing
@@ -260,6 +305,7 @@ final class HootController: ObservableObject {
         currentAnswerTask = Task { [weak self] in
             await self?.runAnswerPipeline(
                 questionText: trimmedQuestionText,
+                reviewTurn: reviewTurnForThisQuestion,
                 pipelineGeneration: pipelineGeneration,
                 youTubePauseTask: youTubePauseTaskForThisQuestion
             )
@@ -272,10 +318,13 @@ final class HootController: ObservableObject {
 
     private func runAnswerPipeline(
         questionText: String,
+        reviewTurn: ReviewTurn?,
         pipelineGeneration: Int,
         youTubePauseTask: Task<Bool, Never>?
     ) async {
         var didRequestExplainerVideo = false
+        /// Offered after the reply is spoken, so the nudge doesn't talk over it.
+        var savedVideoEntryToOfferAfterForgottenReview: MemoryEntry?
 
         do {
             let capturedScreens = try await ScreenCapturer.captureAllScreens()
@@ -285,11 +334,20 @@ final class HootController: ObservableObject {
             // the speaker just said. History keeps the plain transcript so
             // the transcript window isn't repeated on every turn.
             var userPromptWithVideoContext = questionText
+            if let reviewTurn {
+                userPromptWithVideoContext = Self.userTextForReviewAnswer(questionText, reviewTurn: reviewTurn)
+            }
             var youTubeContextForExplainerVideo: StudioYouTubeContext?
+            var memoryRecallQueryLines = [questionText]
             let didPauseYouTubeVideoForThisQuestion = await youTubePauseTask?.value ?? false
             if didPauseYouTubeVideoForThisQuestion,
                let youTubeLearningContext = await youTubeContextProvider.learningContextForMostRecentPausedVideo() {
                 userPromptWithVideoContext += "\n\n" + youTubeLearningContext.promptContextBlock
+                memoryRecallQueryLines.append(youTubeLearningContext.title)
+                memoryRecallQueryLines.append(contentsOf: Self.lastTranscriptLinesWithoutTimestamps(
+                    youTubeLearningContext.transcriptWindowText,
+                    lineCount: Self.transcriptLinesUsedForMemoryRecall
+                ))
                 youTubeContextForExplainerVideo = StudioYouTubeContext(
                     videoId: youTubeLearningContext.videoId,
                     title: youTubeLearningContext.title,
@@ -300,6 +358,26 @@ final class HootController: ObservableObject {
             }
             guard isCurrentGeneration(pipelineGeneration) else { return }
 
+            // Remind the tutor what this learner got stuck on before, so it
+            // can connect the dots ("same idea as tuesday"). Not for review
+            // answers: those are about one known concept.
+            if reviewTurn == nil,
+               let pastConfusionsBlock = MemoryRecall.promptContextBlock(forQueryText: memoryRecallQueryLines.joined(separator: "\n")) {
+                userPromptWithVideoContext += "\n\n" + pastConfusionsBlock
+                print("🧠 recall:\n\(pastConfusionsBlock)")
+            }
+
+            var systemPrompt = HootTutorPrompt.systemPromptForCurrentBuddy()
+            if let reviewTurn {
+                let latestEntryForConcept = MemoryStore.shared.entries(forConcept: reviewTurn.concept).first
+                systemPrompt += HootTutorPrompt.reviewModePromptBlock(
+                    concept: reviewTurn.concept,
+                    reviewQuestion: reviewTurn.question,
+                    savedAnswerSummary: latestEntryForConcept?.answerSummary,
+                    hasSavedExplainerVideo: MemoryStore.shared.mostRecentEntryWithExplainerVideo(forConcept: reviewTurn.concept) != nil
+                )
+            }
+
             // Speak the answer sentence by sentence while it is still being
             // written, instead of waiting for the whole thing.
             let streamingSpeechState = StreamingSpeechState()
@@ -307,7 +385,7 @@ final class HootController: ObservableObject {
 
             let fullResponseText = try await llmClient.streamAnswer(
                 screenshots: capturedScreens,
-                systemPrompt: HootTutorPrompt.systemPromptForCurrentBuddy(),
+                systemPrompt: systemPrompt,
                 conversationHistory: conversationHistory,
                 userPrompt: userPromptWithVideoContext,
                 onTextChunk: { [weak self] accumulatedResponseText in
@@ -323,9 +401,34 @@ final class HootController: ObservableObject {
             // Pull out the [VIDEO:...] request first, then the pointing tag.
             let spokenText = HootResponseTags.speakableText(from: fullResponseText)
             let explainerVideoParseResult = HootResponseTags.parseExplainerVideoRequest(from: fullResponseText)
+            let recentQuestionSourceDescription = youTubeContextForExplainerVideo?.title
+                ?? NSWorkspace.shared.frontmostApplication?.localizedName
+
+            // Remember what they got stuck on (skipped for chit-chat and for
+            // review answers, which are graded instead).
+            var rememberedEntryId: UUID?
+            if let reviewTurn {
+                let reviewResult = HootResponseTags.parseReviewResult(from: fullResponseText) ?? .shaky
+                MemoryStore.shared.recordReviewResult(reviewResult, forConcept: reviewTurn.concept)
+                if reviewResult == .forgot {
+                    savedVideoEntryToOfferAfterForgottenReview = MemoryStore.shared
+                        .mostRecentEntryWithExplainerVideo(forConcept: reviewTurn.concept)
+                }
+            } else if let concept = HootResponseTags.parseConcept(from: fullResponseText) {
+                rememberedEntryId = MemoryStore.shared.recordAnsweredQuestion(
+                    question: questionText,
+                    concept: concept,
+                    answerSummary: HootResponseTags.answerSummary(fromSpokenText: spokenText),
+                    sourceTitle: recentQuestionSourceDescription,
+                    youTubeVideoId: youTubeContextForExplainerVideo?.videoId,
+                    youTubeTimeSeconds: youTubeContextForExplainerVideo?.t
+                )
+            }
+
             if let explainerVideoBrief = explainerVideoParseResult.explainerVideoBrief {
                 print("🎬 Explainer video requested: \(explainerVideoBrief)")
                 didRequestExplainerVideo = true
+                memoryEntryIdForMostRecentExplainerVideoRequest = rememberedEntryId
                 latestExplainerVideoRequest = ExplainerVideoRequest(
                     question: questionText,
                     brief: explainerVideoBrief,
@@ -346,15 +449,16 @@ final class HootController: ObservableObject {
 
             // Show it under "recent" in the menu bar panel. The source is the
             // YouTube video's title when the question paused one, else the app.
-            let recentQuestionSourceDescription = youTubeContextForExplainerVideo?.title
-                ?? NSWorkspace.shared.frontmostApplication?.localizedName
-            RecentQuestionsStore.shared.recordQuestion(
-                questionText: questionText,
-                sourceDescription: recentQuestionSourceDescription,
-                hadExplainerVideo: didRequestExplainerVideo
-            )
+            if reviewTurn == nil {
+                RecentQuestionsStore.shared.recordQuestion(
+                    questionText: questionText,
+                    sourceDescription: recentQuestionSourceDescription,
+                    hadExplainerVideo: didRequestExplainerVideo
+                )
+            }
 
-            conversationHistory.append(LLMClient.ConversationTurn(userText: questionText, assistantText: fullResponseText))
+            let userTextForHistory = reviewTurn.map { Self.userTextForReviewAnswer(questionText, reviewTurn: $0) } ?? questionText
+            conversationHistory.append(LLMClient.ConversationTurn(userText: userTextForHistory, assistantText: fullResponseText))
             if conversationHistory.count > Self.maximumConversationTurnsKept {
                 conversationHistory.removeFirst(conversationHistory.count - Self.maximumConversationTurnsKept)
             }
@@ -402,11 +506,92 @@ final class HootController: ObservableObject {
         isAnswerPipelineRunning = false
         currentAnswerTask = nil
 
+        if let savedVideoEntryToOfferAfterForgottenReview {
+            onReviewForgotWithSavedVideo?(savedVideoEntryToOfferAfterForgottenReview)
+        }
+
         // The explainer panel resumes the video when it closes; otherwise the
         // answer is over, so give the lecture back.
         if !didRequestExplainerVideo {
             await youTubeContextProvider.resumeVideoIfWePausedIt()
         }
+    }
+
+    // MARK: - Memory helpers
+
+    /// What the tutor (and the history) sees for a spoken review answer.
+    private static func userTextForReviewAnswer(_ spokenAnswer: String, reviewTurn: ReviewTurn) -> String {
+        "(my answer to your quick check about \(reviewTurn.concept): \"\(reviewTurn.question)\") \(spokenAnswer)"
+    }
+
+    /// The last few transcript lines with their "[mm:ss]" stamps removed.
+    private static func lastTranscriptLinesWithoutTimestamps(_ transcriptWindowText: String?, lineCount: Int) -> [String] {
+        guard let transcriptWindowText else { return [] }
+        let transcriptLines = transcriptWindowText
+            .split(whereSeparator: \.isNewline)
+            .map { transcriptLine -> String in
+                var lineText = Substring(transcriptLine)
+                if lineText.hasPrefix("["), let closingBracketIndex = lineText.firstIndex(of: "]") {
+                    lineText = lineText[lineText.index(after: closingBracketIndex)...]
+                }
+                return lineText.trimmingCharacters(in: .whitespaces)
+            }
+            .filter { !$0.isEmpty }
+        return Array(transcriptLines.suffix(lineCount))
+    }
+
+    // MARK: - Spaced review turn
+
+    /// Starts a spaced-review quick check: hoot says the question out loud,
+    /// then listens hands-free (AssemblyAI ends the turn when they stop
+    /// talking, which submits the answer). Holding ⌃⌥ works too. The next
+    /// question is graded instead of remembered.
+    func beginReviewTurn(concept: String, question: String) {
+        NotificationCenter.default.post(name: .hootDismissMenuPanel, object: nil)
+        cancelCurrentAnswerAndSpeech()
+        voiceInputController.cancelListening()
+        clearDetectedElementLocation()
+        streamingResponseText = ""
+        // No YouTube video was paused for this answer; don't reuse an old pause.
+        currentQuestionYouTubePauseTask = nil
+        activeReviewTurn = ReviewTurn(concept: concept, question: question)
+
+        let pipelineGeneration = answerGeneration
+        isAnswerPipelineRunning = true
+        voiceState = .processing
+        currentAnswerTask = Task { [weak self] in
+            await self?.speakReviewQuestionThenListen(question, pipelineGeneration: pipelineGeneration)
+        }
+    }
+
+    private func speakReviewQuestionThenListen(_ reviewQuestion: String, pipelineGeneration: Int) async {
+        startStreamingSpokenAnswer(pipelineGeneration: pipelineGeneration)
+        cartesiaTTSClient.enqueueSentence(reviewQuestion)
+        cartesiaTTSClient.finishSpokenAnswer()
+        while cartesiaTTSClient.isPlaying {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard isCurrentGeneration(pipelineGeneration) else { return }
+        }
+        if didTextToSpeechFailBeforeAnyAudio {
+            await speakWithFallbackVoice(reviewQuestion, pipelineGeneration: pipelineGeneration)
+        }
+        // A beat of quiet so the mic doesn't catch the end of hoot's voice.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard isCurrentGeneration(pipelineGeneration), !isPushToTalkKeyHeld else { return }
+
+        isAnswerPipelineRunning = false
+        currentAnswerTask = nil
+        voiceState = .listening
+        voiceInputController.beginListening()
+
+        // If they never finish a sentence, submit what was heard (or nothing,
+        // which ends the review turn and postpones it).
+        try? await Task.sleep(nanoseconds: UInt64(Self.secondsToListenForReviewAnswer * 1_000_000_000))
+        guard pipelineGeneration == answerGeneration,
+              voiceState == .listening,
+              !isPushToTalkKeyHeld,
+              voiceInputController.isListening else { return }
+        voiceInputController.finishListening()
     }
 
     /// Says what actually went wrong when we can tell; a rebuild with a new
