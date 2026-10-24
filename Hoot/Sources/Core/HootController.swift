@@ -362,7 +362,7 @@ final class HootController: ObservableObject {
             // can connect the dots ("same idea as tuesday"). Not for review
             // answers: those are about one known concept.
             if reviewTurn == nil,
-               let pastConfusionsBlock = MemoryRecall.promptContextBlock(forQueryText: memoryRecallQueryLines.joined(separator: "\n")) {
+               let pastConfusionsBlock = await MemoryRecall.promptContextBlock(forQueryText: memoryRecallQueryLines.joined(separator: "\n")) {
                 userPromptWithVideoContext += "\n\n" + pastConfusionsBlock
                 print("🧠 recall:\n\(pastConfusionsBlock)")
             }

@@ -39,6 +39,9 @@ export const env = {
   anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-opus-5-5',
   cartesiaKey: process.env.CARTESIA_API_KEY || '',
   cartesiaVoice: process.env.CARTESIA_VOICE_ID || 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4',
+  mossProjectId: process.env.MOSS_PROJECT_ID || '',
+  mossProjectKey: process.env.MOSS_PROJECT_KEY || '',
+  mossMemoryIndex: process.env.MOSS_MEMORY_INDEX || 'hoot-memory',
 };
 
 /** Which keys are present (never the values). */
@@ -49,5 +52,6 @@ export function keyStatus() {
     openai: Boolean(env.openaiKey),
     anthropic: Boolean(env.anthropicKey),
     cartesia: Boolean(env.cartesiaKey),
+    moss: Boolean(env.mossProjectId && env.mossProjectKey),
   };
 }

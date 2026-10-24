@@ -9,10 +9,12 @@
     "start": "tsx src/server.ts",
     "setup:manim": "cd manim && uv sync",
     "test:questions": "tsx test/run.ts",
+    "test:moss-memory": "tsx test/moss-memory.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.2.0"
+    "@anthropic-ai/sdk": "^1.2.0",
+    "@moss-js/moss": "^1.21.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

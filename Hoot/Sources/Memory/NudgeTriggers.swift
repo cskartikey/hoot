@@ -120,14 +120,15 @@ final class SameIdeaNudgeWatcher {
                     lastSeconds: self.transcriptSecondsToMatch
                   ),
                   recentTranscriptText.count >= self.minimumTranscriptCharactersToMatch else { return }
-            self.offerSameIdeaNudgeIfAnythingMatches(transcriptText: recentTranscriptText)
+            await self.offerSameIdeaNudgeIfAnythingMatches(transcriptText: recentTranscriptText)
         }
     }
 
-    private func offerSameIdeaNudgeIfAnythingMatches(transcriptText: String) {
-        guard let bestMatch = MemoryRecall.relatedMemories(
+    private func offerSameIdeaNudgeIfAnythingMatches(transcriptText: String) async {
+        guard let bestMatch = await MemoryRecall.relatedMemoriesPreferringMoss(
             forQueryText: transcriptText,
             limit: 1,
+            minimumMossScore: MemoryRecall.minimumMossScoreForSameIdeaNudge,
             minimumSimilarity: minimumSimilarityForSameIdea
         ).first else { return }
 

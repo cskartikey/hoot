@@ -35,6 +35,7 @@
 		50D96CAB5AEBA946F5173440 /* JetBrainsMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0AB635E700927BE6AB5B5C8C /* JetBrainsMono-SemiBold.ttf */; };
 		5583F4B27A41DA74FBC1447F /* PetOverlayPieces.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC71EAC5B80491130D88D9BB /* PetOverlayPieces.swift */; };
 		5B919594C7BD83BDC2273676 /* lotl.json in Resources */ = {isa = PBXBuildFile; fileRef = E0580D0978F474A44EDF993A /* lotl.json */; };
+		5C1CDB8F2DBB2D246E88760C /* MossMemorySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F74EB63AC5457A3A62F5D8 /* MossMemorySearch.swift */; };
 		609486BAB267AB4375D7B68D /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D66B37253DC6367FD764D6F5 /* MenuBarController.swift */; };
 		61925A6959709B8487CEF47B /* VoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276CF46A31616FE267788FCB /* VoiceInputController.swift */; };
 		6BDF8DDE17B6FDFB9EFF1BE8 /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = BC8B2249CEF58E1316BDED2B /* OFL.txt */; };
@@ -115,6 +116,7 @@
 		EFE21683AC19BB66BD39EA5C /* hoot.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hoot.json; sourceTree = "<group>"; };
 		F31969E0CC39D3231C137CDD /* CornerNudgeWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerNudgeWindow.swift; sourceTree = "<group>"; };
 		F6CDDDFB64D5A64A8BEB81FB /* MenuPanelHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanelHomeView.swift; sourceTree = "<group>"; };
+		F8F74EB63AC5457A3A62F5D8 /* MossMemorySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MossMemorySearch.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -175,6 +177,7 @@
 			children = (
 				1638B6065852F38E20D1CA58 /* MemoryCore.swift */,
 				C2919B42246128435538016E /* MemoryRecall.swift */,
+				F8F74EB63AC5457A3A62F5D8 /* MossMemorySearch.swift */,
 				643F71E91ACA983862047278 /* Nudges.swift */,
 				79F6242EA6D0C519201112CA /* NudgeTriggers.swift */,
 				04782F22EE58309A5DB36166 /* SpacedReviewScheduler.swift */,
@@ -367,6 +370,7 @@
 				E2FFF59D0E6069DD663B81F9 /* MenuPanelSettingsView.swift in Sources */,
 				17381C28F906D56FC96064D3 /* MenuPanelView.swift in Sources */,
 				04B98075C1FDB5EA66C9D9F9 /* MicrophoneSpeechAudioSource.swift in Sources */,
+				5C1CDB8F2DBB2D246E88760C /* MossMemorySearch.swift in Sources */,
 				E313032EDC0E0FB0F7689189 /* NudgeTriggers.swift in Sources */,
 				E6BE3E4744ECC712C02D44E4 /* Nudges.swift in Sources */,
 				184D2D381679A126785F650B /* PermissionCenter.swift in Sources */,

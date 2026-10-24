@@ -11,6 +11,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^1.2.0
         version: 1.2.0
+      '@moss-js/moss':
+        specifier: ^1.21.0
+        version: 1.21.0
     devDependencies:
       '@types/node':
         specifier: ^26.6.5
@@ -192,6 +195,46 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@moss-js/moss-core-darwin-arm64@0.36.0':
+    resolution: {integrity: sha512-1OitWTXziCOWMbYCwpX/LqwWwhHaH6cmYBTxROqPsHnL4VscWr31xf7Qp5o20Qzan39LrQPT3yB+KDLPpu8PYw==}
+    engines: {node: '>=20'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@moss-js/moss-core-darwin-x64@0.36.0':
+    resolution: {integrity: sha512-76OqCLP4y6DcLtZDbzByzfGT7zmq1tnjr6bk/XkFo1G4hQAsMzLrq34UkjSUrFV5qX/Jq7MFkr69KP2OJf5Kmg==}
+    engines: {node: '>=20'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@moss-js/moss-core-linux-arm64-gnu@0.36.0':
+    resolution: {integrity: sha512-CmtFU/EHLiSIKQiySeBorOJPpzoYPm35jdQvBw/Gaix8k4A68uOx/JjNTXpYBu5sYl+f+B1Jojp6ltyjXIXzBA==}
+    engines: {node: '>=20'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@moss-js/moss-core-linux-x64-gnu@0.36.0':
+    resolution: {integrity: sha512-L5PEZUAe9m2yzAuq3V1y0o8sQiJ/rZdemec1jkE/PMsd34f1S6sPcy0O1mGfFAwa5+h5uvH8EDQAX5+WhF7qrQ==}
+    engines: {node: '>=20'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@moss-js/moss-core-win32-x64-msvc@0.36.0':
+    resolution: {integrity: sha512-y1FPECJ6B+7R6AHURmmtoZ2wnpGqpR/UVbbACd4yOF4ftj5FjjxQk7B0orJ6mz5bXCbVC+/NMT1pVVVfxW9hFQ==}
+    engines: {node: '>=20'}
+    cpu: [x64]
+    os: [win32]
+
+  '@moss-js/moss-core@0.36.0':
+    resolution: {integrity: sha512-sK1d2/blPKEz6znbJ0LKq/QT986U9Q8K6ISb4cIDzhqR8TKJnh0zH5jUdU6rPdlgyhdsb9uC3FbykcI+RJldvQ==}
+    engines: {node: '>=20'}
+
+  '@moss-js/moss@1.21.0':
+    resolution: {integrity: sha512-LWJyPoxBGiVz4dQGPfyEbmZ13Q9bG1I3cPX8dCpmEqIPoYzfWEqT16g9iY3+DUjAF0wayzaEvlHLFS4HqFpugw==}
+    engines: {node: '>=20.4'}
 
   '@opentelemetry/api@1.10.0':
     resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
@@ -446,6 +489,33 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@moss-js/moss-core-darwin-arm64@0.36.0':
+    optional: true
+
+  '@moss-js/moss-core-darwin-x64@0.36.0':
+    optional: true
+
+  '@moss-js/moss-core-linux-arm64-gnu@0.36.0':
+    optional: true
+
+  '@moss-js/moss-core-linux-x64-gnu@0.36.0':
+    optional: true
+
+  '@moss-js/moss-core-win32-x64-msvc@0.36.0':
+    optional: true
+
+  '@moss-js/moss-core@0.36.0':
+    optionalDependencies:
+      '@moss-js/moss-core-darwin-arm64': 0.36.0
+      '@moss-js/moss-core-darwin-x64': 0.36.0
+      '@moss-js/moss-core-linux-arm64-gnu': 0.36.0
+      '@moss-js/moss-core-linux-x64-gnu': 0.36.0
+      '@moss-js/moss-core-win32-x64-msvc': 0.36.0
+
+  '@moss-js/moss@1.21.0':
+    dependencies:
+      '@moss-js/moss-core': 0.36.0
 
   '@opentelemetry/api@1.10.0': {}
 

@@ -38,6 +38,8 @@ Read at startup from the process env, then `studio/.env`, then the repo's `worke
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | `gpt-6.1-sol` | Chat Completions with `reasoning_effort` |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | `claude-opus-5-5` | Messages API, adaptive thinking |
 | `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` | | Sonic 3.6, same voice as the app |
+| `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY` | | Moss memory search (optional; see "Moss") |
+| `MOSS_MEMORY_INDEX` | `hoot-memory` | Moss index / session name |
 | `STUDIO_PORT` | `7777` | |
 | `STUDIO_PUBLIC_URL` | `http://localhost:7777` | base of the `url` in `done` |
 
@@ -78,6 +80,31 @@ Debug summary: outcome (`first` / `fixed` / `fallback`), timings, errors, events
 ### `GET /health`
 `{"ok":true,"warm":"ready","brain":"openai","model":"…","openai":true,"anthropic":false,"cartesia":true}`
 
+## Moss (memory search)
+
+hoot remembers what the learner got stuck on (`memory.json` in the app). The studio mirrors those memories into [Moss](https://moss.dev) so recall ranks them by meaning: Apple's on-device sentence embedding couldn't tell technical topics apart ("det 0 in 3d" scored closer to a *variance* memory than to the *determinant* one), so the app had to blend it with keyword overlap. Code: `src/memory/moss.ts`, app side `Hoot/Sources/Memory/MossMemorySearch.swift`.
+
+How it uses Moss (`@moss-js/moss`, model `moss-mediumlm`):
+
+- **On start:** `client.session('hoot-memory', 'moss-mediumlm')` then `session.loadIndex('hoot-memory')` pulls the cloud copy in without re-embedding.
+- **New memory:** `session.addDocs([...], { upsert: true })`: embedded in-process, queryable right away.
+- **Recall:** `session.query(text, { topK, alpha })` in memory (a few ms). The app sends the question, the video title and the last transcript lines; each is queried on its own and a memory keeps its best score.
+- **Persist:** `session.pushIndex()` 30 s after the last change and on SIGTERM/SIGINT. A push replaces the cloud index, so it only happens once the cloud copy was loaded (a failed load means local-only, no push).
+- **Forget everything:** deletes the session's docs and `client.deleteIndex('hoot-memory')`.
+
+Without credentials every route answers `{"enabled":false}` immediately and the app uses its on-device blend. The app also falls back when the studio is down or a query takes over 400 ms, and on launch it backfills Moss if Moss holds fewer memories than `memory.json`.
+
+Free tier: the Developer plan allows 3 indexes, and local queries are never metered. Session time is metered (60 min/month free; Cal Hacks credits via code `CALHACKS` on the portal billing page). We don't use `autoRefresh`, because every poll counts as session time.
+
+| route | body | reply |
+|---|---|---|
+| `GET /memory/health` | | `{enabled, ready, indexName, model, documentCount, cloudCopyLoaded, unpushedChanges, lastPushedAt}` |
+| `POST /memory/upsert` | `{id, text, metadata:{concept, askedAt}}` or `{documents:[...]}` | `{enabled, ok, added, updated, documentCount}` |
+| `POST /memory/query` | `{text}` or `{texts:[...]}`, `topK`=5, `alpha`=0.8 | `{enabled, ready, results:[{id, score, concept}], tookMs}` |
+| `POST /memory/reset` | | `{enabled, ok}` |
+
+Tuning: `pnpm test:moss-memory` indexes six sample memories into a throwaway local session (it is never pushed) and prints, for each model and alpha, the score of the right memory and of the best wrong one for the same test questions the on-device blend was tuned on. Moss's `score` is the semantic similarity rescaled to 0–1, and `alpha` changes the hybrid *ranking* (which candidates come back and in what order), not the score. The thresholds are `MemoryRecall.minimumMossScore` (prompt context) and `minimumMossScoreForSameIdeaNudge` (the unprompted nudge).
+
 ## How sync works
 
 Each beat's slot is its narration length plus a short pause. The scene prompt gets the cumulative end times as `T = [...]`, and the generated code calls `wait_until(self, T[i])` at the end of every beat. `wait_until` pads with `self.wait` and records the scene time it actually reached. If a beat's animations run long, the mux places that beat's narration where the beat really starts instead of drifting, and the last frame is held if the audio runs past the video.
@@ -99,6 +126,8 @@ manim/runner.py          renders a scene with plain tracebacks
 test/questions.json      5 fixed test questions
 test/run.ts              pnpm test:questions [--parallel] [--only a,b]
 test/paths.ts            exercise the fix and fallback paths on a finished job
+test/moss-memory.ts      pnpm test:moss-memory: score table for tuning Moss recall
+src/memory/moss.ts       Moss session for hoot's memory search
 out/<jobId>/             per-job files: script, beats, audio, scene_N.py, error_N.txt, video.mp4
 ```
 
@@ -108,4 +137,4 @@ out/<jobId>/             per-job files: script, beats, audio, scene_N.py, error_
 - No LaTeX: math is Unicode text, so stacked fractions and big matrices are drawn as `a/b` and the kit's `matrix()`.
 - The scene model can still produce layouts with small overlaps; the prompt asks for a region plan and the kit has `fit`/`keep_in_frame`, but nothing checks the frames.
 - Renders run in parallel with no queue; several jobs at once share the CPU.
-- `POST /explain/:id/continue` and memory endpoints from the plan are not built yet.
+- `POST /explain/:id/continue` from the plan is not built yet.

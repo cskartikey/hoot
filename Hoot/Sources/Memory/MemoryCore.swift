@@ -152,8 +152,9 @@ struct ConceptReview: Codable, Identifiable, Equatable {
 
 struct MemoryMatch: Equatable {
     let entry: MemoryEntry
-    /// Relevance in 0…1: sentence embedding blended with concept and word
-    /// overlap (see MemoryRecall). Not a raw cosine.
+    /// Relevance in 0…1: Moss's score when recall went through Moss, else the
+    /// sentence embedding blended with concept and word overlap (see
+    /// MemoryRecall). Not a raw cosine.
     let similarity: Float
 }
 
@@ -190,6 +191,11 @@ final class MemoryStore: ObservableObject {
             .appendingPathComponent("hoot", isDirectory: true)
             .appendingPathComponent("memory.json")
         loadFromDisk()
+        // After init returns (MossMemorySearch reads MemoryStore.shared):
+        // make sure Moss has every memory, e.g. ones saved before Moss was set up.
+        Task { @MainActor in
+            await MossMemorySearch.shared.backfillIfNeeded()
+        }
     }
 
     // MARK: Capture
@@ -233,6 +239,7 @@ final class MemoryStore: ObservableObject {
 
         bumpConceptReviewForNewQuestion(concept: normalizedConcept, askedAt: askedAt)
         saveToDisk()
+        MossMemorySearch.shared.upsertInBackground(newEntry)
         print("🧠 remembered \"\(normalizedConcept)\" (\(entries.count) memories)")
         return newEntry.id
     }
@@ -371,6 +378,7 @@ final class MemoryStore: ObservableObject {
         fileWriteQueue.async {
             try? FileManager.default.removeItem(at: memoryFileURL)
         }
+        MossMemorySearch.shared.resetInBackground()
         NotificationCenter.default.post(name: .hootMemoryWasForgotten, object: nil)
         print("🧠 forgot everything")
     }

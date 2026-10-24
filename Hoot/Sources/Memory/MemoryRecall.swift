@@ -16,6 +16,9 @@
 //  clamped to 1. The tutor makes the final call on whether a match is
 //  really the same idea, so the threshold leans permissive.
 //
+//  When the studio's Moss search is up (MossMemorySearch), recall asks Moss
+//  first and uses its scores instead; the blend above is the fallback.
+//
 
 import Foundation
 
@@ -27,6 +30,12 @@ enum MemoryRecall {
     /// Picked from the threshold test: related pairs scored 0.54–1.0 (two
     /// harder paraphrases 0.43–0.45), unrelated ones at most 0.44.
     nonisolated static let defaultMinimumSimilarity: Float = 0.50
+
+    /// Moss score a memory needs to count as related (moss-mediumlm, picked
+    /// with studio/test/moss-memory.ts; see studio/README.md "Moss").
+    nonisolated static let minimumMossScore: Float = 0.50
+    /// Stricter Moss score for the unprompted "same idea as before" nudge.
+    nonisolated static let minimumMossScoreForSameIdeaNudge: Float = 0.60
 
     private static let embeddingWeight: Float = 0.6
     private static let wordOverlapWeight: Float = 0.4
@@ -49,6 +58,55 @@ enum MemoryRecall {
 
     // MARK: Search
 
+    /// Splits the query into its non-empty lines (question, video title,
+    /// transcript lines), at most `maximumQueryLinesEmbedded`.
+    private static func queryLines(in queryText: String) -> [String] {
+        queryText
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Like `relatedMemories`, but asks Moss first (via the studio) and only
+    /// runs the on-device blend when Moss can't answer. Moss scores are
+    /// compared with `minimumMossScore`, blend scores with `minimumSimilarity`.
+    static func relatedMemoriesPreferringMoss(
+        forQueryText queryText: String,
+        limit: Int = 3,
+        minimumMossScore: Float = MemoryRecall.minimumMossScore,
+        minimumSimilarity: Float = MemoryRecall.defaultMinimumSimilarity
+    ) async -> [MemoryMatch] {
+        let allEntries = MemoryStore.shared.entries
+        let lines = Array(queryLines(in: queryText).prefix(maximumQueryLinesEmbedded))
+        guard !allEntries.isEmpty, limit > 0, !lines.isEmpty else { return [] }
+
+        guard let mossHits = await MossMemorySearch.shared.relatedMemoryHits(forQueryLines: lines, topK: max(limit * 2, 5)) else {
+            let onDeviceMatches = relatedMemories(forQueryText: queryText, limit: limit, minimumSimilarity: minimumSimilarity)
+            print("🧠 recall: on-device blend (Moss unavailable), \(onDeviceMatches.count) match(es)")
+            return onDeviceMatches
+        }
+
+        // Moss may know memories that memory.json has since dropped (the
+        // 500-entry cap, or a forget that hasn't reached Moss): skip those.
+        let entriesById = Dictionary(allEntries.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        var bestMatchByConcept: [String: MemoryMatch] = [:]
+        for mossHit in mossHits where mossHit.score >= minimumMossScore {
+            guard let entry = entriesById[mossHit.id] else { continue }
+            if let existingMatch = bestMatchByConcept[entry.concept], existingMatch.similarity >= mossHit.score { continue }
+            bestMatchByConcept[entry.concept] = MemoryMatch(entry: entry, similarity: mossHit.score)
+        }
+        let mossMatches = bestMatchByConcept.values
+            .sorted { firstMatch, secondMatch in
+                if firstMatch.similarity != secondMatch.similarity { return firstMatch.similarity > secondMatch.similarity }
+                return firstMatch.entry.askedAt > secondMatch.entry.askedAt
+            }
+            .prefix(limit)
+            .map { $0 }
+        let topScores = mossHits.prefix(3).map { String(format: "%.2f", $0.score) }.joined(separator: ", ")
+        print("🧠 recall: Moss, \(mossMatches.count) match(es) ≥ \(minimumMossScore) (top scores: \(topScores))")
+        return mossMatches
+    }
+
     /// Past memories related to `queryText`, most similar first, above
     /// `minimumSimilarity`, at most one per concept. `queryText` may span
     /// several lines (question, video title, transcript lines); each line is
@@ -61,10 +119,7 @@ enum MemoryRecall {
         let allEntries = MemoryStore.shared.entries
         guard !allEntries.isEmpty, limit > 0 else { return [] }
 
-        let queryLines = queryText
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let queryLines = queryLines(in: queryText)
         guard !queryLines.isEmpty else { return [] }
 
         let queryLineEmbeddings = queryLines.prefix(maximumQueryLinesEmbedded).compactMap { embeddingVector(forText: $0) }
@@ -137,9 +192,10 @@ enum MemoryRecall {
     // MARK: Prompt block
 
     /// The "things this learner got stuck on before" block for the tutor
-    /// prompt, or nil when nothing relevant passes the threshold.
-    static func promptContextBlock(forQueryText queryText: String) -> String? {
-        let relatedMatches = relatedMemories(forQueryText: queryText)
+    /// prompt, or nil when nothing relevant passes the threshold. Moss first,
+    /// on-device blend when the studio can't answer.
+    static func promptContextBlock(forQueryText queryText: String) async -> String? {
+        let relatedMatches = await relatedMemoriesPreferringMoss(forQueryText: queryText)
         guard !relatedMatches.isEmpty else { return nil }
 
         let now = Date()
