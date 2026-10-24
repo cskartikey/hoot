@@ -25,3 +25,4 @@ xcuserdata/
 xcuserdata/
 .wrangler/
 studio/.env
+.claude/worktrees/
