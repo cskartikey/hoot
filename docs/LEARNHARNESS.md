@@ -69,7 +69,7 @@ Probe sessions, the plan tree / DAG window, the knowledge-graph canvas, separate
 
 ## 7. Build order and estimates
 
-Status (Sat Oct 24, evening): **1, 2 and 3 are built** (prompt doctrine; `[PREDICT]` guess-first; `[CHECK:question]` quick checks with the `quick checks` toggle, graded through `[REVIEW:]` into the review ladder). The "⌃⌥ follow up" pill reads "your guess" / "answer" while a question is open and the linger lasts 8s. 4 and 5 wait on the pointing-frame design pass (§5).
+Status (Sat Oct 24, evening): **1, 2 and 3 are built** (prompt doctrine; `[PREDICT]` guess-first; `[CHECK:question]` quick checks with the `quick checks` toggle, graded through `[REVIEW:]` into the review ladder). The "⌃⌥ follow up" pill reads "your guess" / "answer" while a question is open and the linger lasts 8s. 4 and 5 (walkthrough + watch-and-confirm) are built from the Claude Design spec (`docs/design/WALKTHROUGH.md`), plus three picture media that weren't in this plan: annotation marks over the pointed thing (`[DRAW:]`), instant SVG sketches in the panel (`[SKETCH:]`) and napkin sketches drawn on the screen in the same reply (`[NAPKIN:]`). Live behaviour is untested as of Sat evening.
 
 | # | Piece | Files | Est. | Needs |
 |---|---|---|---|---|
