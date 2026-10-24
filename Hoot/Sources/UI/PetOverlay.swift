@@ -196,7 +196,9 @@ private final class PetOverlayWindow: NSPanel {
 }
 
 /// An invisible, clickable square sitting exactly over the dozing corner
-/// hoot, one level above the overlay. Shows the pointing hand on hover.
+/// hoot, one level above the overlay. Click opens the panel; dragging moves
+/// hoot's home (the sprite follows on the next frame tick, because the
+/// coordinator keeps the dozing hoot on `homeCenterInGlobalSpace()`).
 private final class CornerPetClickTargetWindow: NSPanel {
     static let sideLength: CGFloat = 52
 
@@ -218,7 +220,20 @@ private final class CornerPetClickTargetWindow: NSPanel {
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
 
-        contentView = CornerPetClickTargetView(onClick: { [weak self] in self?.onClick?() })
+        contentView = CornerPetClickTargetView(
+            onClick: { [weak self] in self?.onClick?() },
+            onDragToNewHomeCenter: { [weak self] newHomeCenter, isDragFinished in
+                self?.followDrag(toHomeCenter: newHomeCenter, isDragFinished: isDragFinished)
+            }
+        )
+    }
+
+    /// Moves the window with the mouse right away instead of waiting for the
+    /// 0.25s refresh, so the drag doesn't feel laggy.
+    private func followDrag(toHomeCenter newHomeCenter: CGPoint, isDragFinished: Bool) {
+        PetHomeSpot.moveHome(toCenter: newHomeCenter, persist: isDragFinished)
+        let keptHomeCenter = PetHomeSpot.homeCenterInGlobalSpace()
+        setFrameOrigin(NSPoint(x: keptHomeCenter.x - Self.sideLength / 2, y: keptHomeCenter.y - Self.sideLength / 2))
     }
 
     override var canBecomeKey: Bool { false }
@@ -226,20 +241,84 @@ private final class CornerPetClickTargetWindow: NSPanel {
 }
 
 private final class CornerPetClickTargetView: NSView {
-    private let onClick: () -> Void
+    /// Mouse travel below this is still a click, so a slightly shaky click
+    /// doesn't nudge hoot by a few points.
+    private static let distanceThatStartsADrag: CGFloat = 4
 
-    init(onClick: @escaping () -> Void) {
+    private let onClick: () -> Void
+    private let onDragToNewHomeCenter: (_ newHomeCenter: CGPoint, _ isDragFinished: Bool) -> Void
+
+    private var mouseDownLocationInGlobalSpace: CGPoint?
+    private var homeCenterAtMouseDown: CGPoint = .zero
+    private var isDragging = false
+
+    init(
+        onClick: @escaping () -> Void,
+        onDragToNewHomeCenter: @escaping (_ newHomeCenter: CGPoint, _ isDragFinished: Bool) -> Void
+    ) {
         self.onClick = onClick
+        self.onDragToNewHomeCenter = onDragToNewHomeCenter
         super.init(frame: .zero)
-        toolTip = "open hoot"
+        toolTip = "click to open hoot · drag to move it"
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func mouseDown(with event: NSEvent) {
+        // Global mouse location, not the event's window location: the window
+        // moves under the mouse while dragging.
+        mouseDownLocationInGlobalSpace = NSEvent.mouseLocation
+        homeCenterAtMouseDown = PetHomeSpot.homeCenterInGlobalSpace()
+        isDragging = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let homeCenterForCurrentDrag = homeCenterForMouse(isDragFinished: false) else { return }
+        onDragToNewHomeCenter(homeCenterForCurrentDrag, false)
+    }
+
     override func mouseUp(with event: NSEvent) {
-        onClick()
+        defer {
+            mouseDownLocationInGlobalSpace = nil
+            isDragging = false
+        }
+        if isDragging, let finalHomeCenter = homeCenterForMouse(isDragFinished: true) {
+            NSCursor.pop()
+            onDragToNewHomeCenter(finalHomeCenter, true)
+        } else {
+            onClick()
+        }
+    }
+
+    /// Nil until the mouse has moved far enough to count as a drag.
+    private func homeCenterForMouse(isDragFinished: Bool) -> CGPoint? {
+        guard let mouseDownLocationInGlobalSpace else { return nil }
+        let currentMouseLocation = NSEvent.mouseLocation
+        let dragOffset = CGSize(
+            width: currentMouseLocation.x - mouseDownLocationInGlobalSpace.x,
+            height: currentMouseLocation.y - mouseDownLocationInGlobalSpace.y
+        )
+        if !isDragging {
+            guard hypot(dragOffset.width, dragOffset.height) >= Self.distanceThatStartsADrag else { return nil }
+            isDragging = true
+            NSCursor.closedHand.push()
+        }
+        return CGPoint(x: homeCenterAtMouseDown.x + dragOffset.width, y: homeCenterAtMouseDown.y + dragOffset.height)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard PetHomeSpot.hasBeenDragged else { return nil }
+        let menu = NSMenu()
+        let resetItem = NSMenuItem(title: "put hoot back in the corner", action: #selector(putHootBackInTheCorner), keyEquivalent: "")
+        resetItem.target = self
+        menu.addItem(resetItem)
+        return menu
+    }
+
+    @objc private func putHootBackInTheCorner() {
+        PetHomeSpot.resetToDefaultCorner()
     }
 
     override func resetCursorRects() {

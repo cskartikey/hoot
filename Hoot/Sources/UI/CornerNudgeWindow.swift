@@ -87,21 +87,40 @@ final class CornerNudgePresenter {
     /// view's fitting size), so the bubble's own edges are inset by it.
     private func panelFrame(forContentSize contentSize: CGSize) -> CGRect {
         let margin = Self.shadowMarginAroundBubble
-        let bubbleRightEdge: CGFloat
-        let bubbleBottomEdge: CGFloat
-        if PetOverlayManager.isCornerHootDozingOnScreen {
-            let homeCenter = PetOverlayCoordinator.homeCenterInGlobalSpace()
-            let hootHalfSide = PetOverlayCoordinator.fullBodySideLength / 2
-            bubbleRightEdge = homeCenter.x + hootHalfSide
-            bubbleBottomEdge = homeCenter.y + hootHalfSide + Self.gapAboveCornerHoot
-        } else {
+        guard PetOverlayManager.isCornerHootDozingOnScreen else {
             let visibleFrame = NSScreen.screens.first?.visibleFrame ?? .zero
-            bubbleRightEdge = visibleFrame.maxX - Self.insetFromVisibleCornerWithoutHoot
-            bubbleBottomEdge = visibleFrame.minY + Self.insetFromVisibleCornerWithoutHoot
+            return CGRect(
+                x: (visibleFrame.maxX - Self.insetFromVisibleCornerWithoutHoot + margin - contentSize.width).rounded(),
+                y: (visibleFrame.minY + Self.insetFromVisibleCornerWithoutHoot - margin).rounded(),
+                width: contentSize.width,
+                height: contentSize.height
+            )
         }
+
+        // hoot can be dragged anywhere, so the bubble goes above it unless
+        // that would run off the top, and lines up with whichever side of
+        // hoot leaves it on screen.
+        let homeCenter = PetOverlayCoordinator.homeCenterInGlobalSpace()
+        let hootHalfSide = PetOverlayCoordinator.fullBodySideLength / 2
+        let visibleFrame = PetHomeSpot.visibleFrameContainingHome()
+
+        let bubbleBottomEdgeAboveHoot = homeCenter.y + hootHalfSide + Self.gapAboveCornerHoot
+        let fitsAboveHoot = bubbleBottomEdgeAboveHoot - margin + contentSize.height <= visibleFrame.maxY
+        let panelOriginY = fitsAboveHoot
+            ? bubbleBottomEdgeAboveHoot - margin
+            : homeCenter.y - hootHalfSide - Self.gapAboveCornerHoot + margin - contentSize.height
+
+        // Right-aligned with hoot by default (hoot in the right half);
+        // left-aligned when hoot sits in the left half of the screen.
+        let isHootInLeftHalf = homeCenter.x < visibleFrame.midX
+        var panelOriginX = isHootInLeftHalf
+            ? homeCenter.x - hootHalfSide - margin
+            : homeCenter.x + hootHalfSide + margin - contentSize.width
+        panelOriginX = min(max(panelOriginX, visibleFrame.minX - margin), visibleFrame.maxX + margin - contentSize.width)
+
         return CGRect(
-            x: (bubbleRightEdge + margin - contentSize.width).rounded(),
-            y: (bubbleBottomEdge - margin).rounded(),
+            x: panelOriginX.rounded(),
+            y: panelOriginY.rounded(),
             width: contentSize.width,
             height: contentSize.height
         )

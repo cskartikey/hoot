@@ -89,10 +89,6 @@ final class PetOverlayCoordinator: ObservableObject {
     /// Head center relative to the cursor tip, in SwiftUI terms (+x right,
     /// +y down): just below-right of the arrow, as in the 4a mock.
     private static let headOffsetFromCursorInSwiftUISpace = CGSize(width: 36, height: 32)
-    /// Gap between the corner hoot and the visible frame's right / bottom
-    /// edges, so it sits just above (or beside) the Dock.
-    private static let homeInsetFromVisibleRightEdge: CGFloat = 12
-    private static let homeInsetFromVisibleBottomEdge: CGFloat = 4
 
     /// The zip from the corner to the cursor (design: ≤150ms).
     private let flightToCursorDurationInSeconds: TimeInterval = 0.15
@@ -323,14 +319,9 @@ final class PetOverlayCoordinator: ObservableObject {
 
     // MARK: - Positions
 
-    /// Bottom-right of the primary screen's visible frame (clear of the Dock).
+    /// Where hoot dozes: the bottom-right corner, or wherever it was dragged.
     static func homeCenterInGlobalSpace() -> CGPoint {
-        guard let primaryScreen = NSScreen.screens.first else { return .zero }
-        let visibleFrame = primaryScreen.visibleFrame
-        return CGPoint(
-            x: visibleFrame.maxX - homeInsetFromVisibleRightEdge - fullBodySideLength / 2,
-            y: visibleFrame.minY + homeInsetFromVisibleBottomEdge + fullBodySideLength / 2
-        )
+        PetHomeSpot.homeCenterInGlobalSpace()
     }
 
     private func headCenterBesideCursor(cursorLocation: CGPoint) -> CGPoint {
