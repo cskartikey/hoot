@@ -4,7 +4,8 @@
 //
 //  Pulls the machine-readable tags out of the tutor's answer:
 //    [VIDEO:brief]                 → ask the studio for an explainer video
-//    [POINT:x,y:label(:screenN)]   → hop over and point at something
+//    [POINT:x,y,w,h:label(:screenN)] → box the thing (top-left x,y + size)
+//    [POINT:x,y:label(:screenN)]   → older point form (center only)
 //    [POINT:none]                  → nothing to point at
 //  and maps a point from screenshot pixels to AppKit global coordinates.
 //
@@ -14,8 +15,12 @@ import Foundation
 
 /// A place the tutor asked hoot to point at, still in screenshot pixel space.
 struct HootPointingTarget: Equatable {
+    /// Center of the target, in screenshot pixels.
     let pixelX: Double
     let pixelY: Double
+    /// Size of the element's box in screenshot pixels, when the tutor gave one.
+    let pixelWidth: Double?
+    let pixelHeight: Double?
     let label: String?
     /// 1-based screen number from the image label, when the tutor gave one.
     let screenNumber: Int?
@@ -26,6 +31,8 @@ struct HootResolvedPointingLocation: Equatable {
     /// AppKit global coordinates (points, bottom-left origin).
     let globalLocation: CGPoint
     let displayFrame: CGRect
+    /// The element's size in points, when the tutor boxed it.
+    let globalBoxSize: CGSize?
 }
 
 enum HootResponseTags {
@@ -62,21 +69,39 @@ enum HootResponseTags {
     static func parsePointingTarget(from responseText: String) -> HootPointingTarget? {
         // Accepts decimals and stray spaces ("[POINT: 640 , 380 : the grid ]")
         // because models aren't perfectly consistent about the format.
-        let pattern = #"\[POINT:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*(?::([^\]]*))?\]"#
+        let numberPattern = #"(-?\d+(?:\.\d+)?)"#
+        let pattern = #"\[POINT:\s*"# + numberPattern + #"\s*,\s*"# + numberPattern
+            + #"(?:\s*,\s*"# + numberPattern + #"\s*,\s*"# + numberPattern + #")?\s*(?::([^\]]*))?\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         let wholeRange = NSRange(responseText.startIndex..., in: responseText)
         guard let lastMatch = regex.matches(in: responseText, range: wholeRange).last,
               let xRange = Range(lastMatch.range(at: 1), in: responseText),
               let yRange = Range(lastMatch.range(at: 2), in: responseText),
-              let pixelX = Double(responseText[xRange]),
-              let pixelY = Double(responseText[yRange]) else {
+              let firstNumber = Double(responseText[xRange]),
+              let secondNumber = Double(responseText[yRange]) else {
             return nil
+        }
+
+        // Four numbers = a box (top-left + size); two = a center point.
+        var pixelX = firstNumber
+        var pixelY = secondNumber
+        var pixelWidth: Double?
+        var pixelHeight: Double?
+        if let widthRange = Range(lastMatch.range(at: 3), in: responseText),
+           let heightRange = Range(lastMatch.range(at: 4), in: responseText),
+           let boxWidth = Double(responseText[widthRange]),
+           let boxHeight = Double(responseText[heightRange]),
+           boxWidth > 0, boxHeight > 0 {
+            pixelWidth = boxWidth
+            pixelHeight = boxHeight
+            pixelX = firstNumber + boxWidth / 2
+            pixelY = secondNumber + boxHeight / 2
         }
 
         // The part after the coordinates is "label" or "label:screenN".
         var label: String?
         var screenNumber: Int?
-        if let labelAndScreenRange = Range(lastMatch.range(at: 3), in: responseText) {
+        if let labelAndScreenRange = Range(lastMatch.range(at: 5), in: responseText) {
             var labelComponents = responseText[labelAndScreenRange]
                 .split(separator: ":", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -89,7 +114,14 @@ enum HootResponseTags {
             label = joinedLabel.isEmpty ? nil : joinedLabel
         }
 
-        return HootPointingTarget(pixelX: pixelX, pixelY: pixelY, label: label, screenNumber: screenNumber)
+        return HootPointingTarget(
+            pixelX: pixelX,
+            pixelY: pixelY,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            label: label,
+            screenNumber: screenNumber
+        )
     }
 
     /// "screen2" / "screen 2" → 2.
@@ -131,9 +163,18 @@ enum HootResponseTags {
         let globalX = displayFrame.minX + (clampedPixelX / imageWidthInPixels) * displayFrame.width
         let globalY = displayFrame.maxY - (clampedPixelY / imageHeightInPixels) * displayFrame.height
 
+        var globalBoxSize: CGSize?
+        if let pixelWidth = pointingTarget.pixelWidth, let pixelHeight = pointingTarget.pixelHeight {
+            globalBoxSize = CGSize(
+                width: min(pixelWidth, imageWidthInPixels) / imageWidthInPixels * displayFrame.width,
+                height: min(pixelHeight, imageHeightInPixels) / imageHeightInPixels * displayFrame.height
+            )
+        }
+
         return HootResolvedPointingLocation(
             globalLocation: CGPoint(x: globalX, y: globalY),
-            displayFrame: displayFrame
+            displayFrame: displayFrame,
+            globalBoxSize: globalBoxSize
         )
     }
 }

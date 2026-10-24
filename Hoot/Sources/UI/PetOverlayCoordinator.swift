@@ -511,7 +511,9 @@ final class PetOverlayCoordinator: ObservableObject {
             ?? NSScreen.screens.first?.frame
             ?? .zero
         let headHalfSide = Self.headSideLength / 2
-        let ringHalfWidth = PetPointingRingView.targetBoxSize.width / 2
+        // Land just outside the ring that wraps the element's real box.
+        let targetElementSize = hootController.detectedElementBoxSize ?? PetPointingRingView.defaultTargetBoxSize
+        let ringHalfWidth = PetPointingRingView.outerSize(forElementSize: targetElementSize).width / 2
         let gapBetweenRingAndHead: CGFloat = 4
         let headCenterXRightOfTarget = targetInGlobalSpace.x + ringHalfWidth + gapBetweenRingAndHead + headHalfSide
         let headCenterXLeftOfTarget = targetInGlobalSpace.x - ringHalfWidth - gapBetweenRingAndHead - headHalfSide

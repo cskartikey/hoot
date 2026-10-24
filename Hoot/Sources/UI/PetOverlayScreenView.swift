@@ -100,11 +100,13 @@ struct PetOverlayScreenView: View {
 
     @ViewBuilder
     private func pointingRing(theme: WaitWhatTheme) -> some View {
+        let targetElementSize = hootController.detectedElementBoxSize ?? PetPointingRingView.defaultTargetBoxSize
+        let ringOuterSize = PetPointingRingView.outerSize(forElementSize: targetElementSize)
         if let pointingTargetInGlobalSpace = petOverlayCoordinator.pointingTargetInGlobalSpace,
-           screenFrame.insetBy(dx: -PetPointingRingView.outerSize.width, dy: -PetPointingRingView.outerSize.height)
+           screenFrame.insetBy(dx: -ringOuterSize.width, dy: -ringOuterSize.height)
             .contains(pointingTargetInGlobalSpace) {
             let isRingShown = petOverlayCoordinator.isPointingRingShown
-            PetPointingRingView(theme: theme)
+            PetPointingRingView(theme: theme, targetBoxSize: targetElementSize)
                 .scaleEffect(isRingShown ? 1 : 0.8)
                 .opacity(isRingShown ? 1 : 0)
                 .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isRingShown)

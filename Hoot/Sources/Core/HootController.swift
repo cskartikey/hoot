@@ -54,6 +54,8 @@ final class HootController: ObservableObject {
     @Published private(set) var detectedElementScreenLocation: CGPoint?
     @Published private(set) var detectedElementDisplayFrame: CGRect?
     @Published private(set) var detectedElementLabel: String?
+    /// The element's size in points when the tutor boxed it; nil = unknown.
+    @Published private(set) var detectedElementBoxSize: CGSize?
 
     @Published var latestExplainerVideoRequest: ExplainerVideoRequest?
     /// Set by the app delegate from the explainer panel's phase.
@@ -155,6 +157,7 @@ final class HootController: ObservableObject {
         detectedElementScreenLocation = nil
         detectedElementDisplayFrame = nil
         detectedElementLabel = nil
+        detectedElementBoxSize = nil
     }
 
     // MARK: - Voice input wiring
@@ -337,6 +340,7 @@ final class HootController: ObservableObject {
                 // all three already set.
                 detectedElementDisplayFrame = resolvedPointingLocation.displayFrame
                 detectedElementLabel = pointingTarget.label
+                detectedElementBoxSize = resolvedPointingLocation.globalBoxSize
                 detectedElementScreenLocation = resolvedPointingLocation.globalLocation
             }
 

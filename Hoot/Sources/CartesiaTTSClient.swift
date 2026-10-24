@@ -180,7 +180,16 @@ final class CartesiaTTSClient {
             // Reveal slightly ahead of the audio so reading never lags behind hearing.
             let revealFraction = min(1, (player.currentTime / clipDuration) * 1.1 + 0.05)
             let revealedCharacterCount = Int(Double(sentenceText.count) * revealFraction)
-            let revealedPartOfSentence = String(sentenceText.prefix(revealedCharacterCount))
+            // Reveal whole words only, so the bubble never shows "twenty-four se".
+            let revealedCharacters = sentenceText.prefix(revealedCharacterCount)
+            let revealedPartOfSentence: String
+            if revealedCharacterCount >= sentenceText.count {
+                revealedPartOfSentence = sentenceText
+            } else if let lastSpaceIndex = revealedCharacters.lastIndex(of: " ") {
+                revealedPartOfSentence = String(revealedCharacters[..<lastSpaceIndex])
+            } else {
+                revealedPartOfSentence = ""
+            }
             onSpokenTextProgress?(spokenTextBeforeThisSentence + separator + revealedPartOfSentence)
             try await Task.sleep(nanoseconds: 40_000_000)
         }

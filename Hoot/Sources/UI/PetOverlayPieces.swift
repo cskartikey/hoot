@@ -215,37 +215,50 @@ struct PetLingerCountdownBarView: View {
 
 // MARK: - Pointing
 
-/// Drawn on the thing hoot points at: a 2pt accent ring with a 6pt
-/// accent@0.25 halo around a radius-7 box. We only get the target's center
-/// point (not the element's size), so the box has a fixed size.
+/// Drawn around the thing hoot points at: a 2pt accent ring with a 6pt
+/// accent@0.25 halo around a radius-7 box. The box is the element's real
+/// size when the tutor boxed it ([POINT:x,y,w,h:...]), else a default.
 struct PetPointingRingView: View {
     let theme: WaitWhatTheme
+    var targetBoxSize: CGSize = PetPointingRingView.defaultTargetBoxSize
 
-    static let targetBoxSize = CGSize(width: 64, height: 40)
+    static let defaultTargetBoxSize = CGSize(width: 64, height: 40)
+    /// Tiny boxes (a single symbol) still get a ring you can see.
+    static let minimumTargetBoxSide: CGFloat = 20
     static let targetBoxCornerRadius: CGFloat = 7
     private static let ringLineWidth: CGFloat = 2
     private static let haloOutset: CGFloat = 6
+    /// Breathing room between the element's edge and the ring.
+    static let paddingAroundElement: CGFloat = 4
 
-    static var outerSize: CGSize {
-        CGSize(width: targetBoxSize.width + haloOutset * 2, height: targetBoxSize.height + haloOutset * 2)
+    /// The box the ring is drawn around: the element plus a little padding.
+    static func ringBoxSize(forElementSize elementSize: CGSize) -> CGSize {
+        CGSize(
+            width: max(elementSize.width, minimumTargetBoxSide) + paddingAroundElement * 2,
+            height: max(elementSize.height, minimumTargetBoxSide) + paddingAroundElement * 2
+        )
+    }
+
+    static func outerSize(forElementSize elementSize: CGSize) -> CGSize {
+        let ringBox = ringBoxSize(forElementSize: elementSize)
+        return CGSize(width: ringBox.width + haloOutset * 2, height: ringBox.height + haloOutset * 2)
     }
 
     var body: some View {
+        let ringBox = Self.ringBoxSize(forElementSize: targetBoxSize)
+        let outer = Self.outerSize(forElementSize: targetBoxSize)
         ZStack {
             // Halo: the band between the ring and 6pt outside the box.
             RoundedRectangle(cornerRadius: Self.targetBoxCornerRadius + Self.haloOutset, style: .continuous)
                 .strokeBorder(theme.accent.opacity(0.25), lineWidth: Self.haloOutset - Self.ringLineWidth)
-                .frame(width: Self.outerSize.width, height: Self.outerSize.height)
+                .frame(width: outer.width, height: outer.height)
 
             // Ring: 2pt right outside the box.
             RoundedRectangle(cornerRadius: Self.targetBoxCornerRadius + Self.ringLineWidth, style: .continuous)
                 .strokeBorder(theme.accent, lineWidth: Self.ringLineWidth)
-                .frame(
-                    width: Self.targetBoxSize.width + Self.ringLineWidth * 2,
-                    height: Self.targetBoxSize.height + Self.ringLineWidth * 2
-                )
+                .frame(width: ringBox.width + Self.ringLineWidth * 2, height: ringBox.height + Self.ringLineWidth * 2)
         }
-        .frame(width: Self.outerSize.width, height: Self.outerSize.height)
+        .frame(width: outer.width, height: outer.height)
     }
 }
 
