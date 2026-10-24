@@ -98,19 +98,38 @@ struct PetOverlayScreenView: View {
         }
     }
 
+    /// The index-card frame (POINTING.md) around what hoot points at, sized
+    /// to the tutor's box, with the label in a tab on top.
     @ViewBuilder
     private func pointingRing(theme: WaitWhatTheme) -> some View {
-        let targetElementSize = hootController.detectedElementBoxSize ?? PetPointingRingView.defaultTargetBoxSize
-        let ringOuterSize = PetPointingRingView.outerSize(forElementSize: targetElementSize)
+        let frameSize = PetPointingFrameView.paddedFrameSize(
+            forElementSize: hootController.detectedElementBoxSize,
+            screenSize: screenFrame.size
+        )
         if let pointingTargetInGlobalSpace = petOverlayCoordinator.pointingTargetInGlobalSpace,
-           screenFrame.insetBy(dx: -ringOuterSize.width, dy: -ringOuterSize.height)
+           screenFrame.insetBy(dx: -(frameSize.width + 24), dy: -(frameSize.height + 24))
             .contains(pointingTargetInGlobalSpace) {
-            let isRingShown = petOverlayCoordinator.isPointingRingShown
-            PetPointingRingView(theme: theme, targetBoxSize: targetElementSize)
-                .scaleEffect(isRingShown ? 1 : 0.8)
-                .opacity(isRingShown ? 1 : 0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isRingShown)
-                .position(localPoint(fromGlobalPoint: pointingTargetInGlobalSpace))
+            let targetCenter = localPoint(fromGlobalPoint: pointingTargetInGlobalSpace)
+            // Snap the top-left to whole points so the 2pt pixels stay crisp.
+            let frameOrigin = CGPoint(
+                x: (targetCenter.x - frameSize.width / 2).rounded(),
+                y: (targetCenter.y - frameSize.height / 2).rounded()
+            )
+            let trimmedLabel = (hootController.detectedElementLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let usableLabel: String? = (trimmedLabel.isEmpty || trimmedLabel.lowercased() == "none") ? nil : trimmedLabel
+            let isTabBelowFrame = frameOrigin.y - PetPointingFrameView.tabVisibleHeightAboveFrame < 8
+
+            PetPointingFrameView(
+                frameSize: frameSize,
+                label: usableLabel,
+                drawProgress: petOverlayCoordinator.pointingFrameDrawProgress,
+                tabRiseOffset: petOverlayCoordinator.pointingTabRiseOffset,
+                tabOpacity: petOverlayCoordinator.pointingTabOpacity,
+                isTabBelowFrame: isTabBelowFrame,
+                theme: theme
+            )
+            .opacity(petOverlayCoordinator.pointingFrameOpacity)
+            .offset(x: frameOrigin.x, y: frameOrigin.y - (isTabBelowFrame ? 0 : 0))
         }
     }
 
@@ -199,9 +218,6 @@ struct PetOverlayScreenView: View {
                     )
                 )
                 .animation(followAnimation, value: headFrame)
-
-            // Pointing: the label chip beside the head, away from the target.
-            pointingLabelChip(headFrame: headFrame, screenSize: screenSize, theme: theme)
 
             // Linger: "⌃⌥ follow up" pill under the head + countdown bar beside it.
             PetFollowUpPillView(theme: theme)

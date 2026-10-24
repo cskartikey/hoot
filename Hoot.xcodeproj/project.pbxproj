@@ -48,6 +48,7 @@
 		DAE0DDE35481FD1F567BC875 /* hoot.json in Resources */ = {isa = PBXBuildFile; fileRef = EFE21683AC19BB66BD39EA5C /* hoot.json */; };
 		DE1EB4B07A98EDDDF05F4A97 /* PushToTalkKeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F3CD9905C7BC9304E947D9C /* PushToTalkKeyMonitor.swift */; };
 		E2FFF59D0E6069DD663B81F9 /* MenuPanelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2C4D1C8375EF589B2B0BB1 /* MenuPanelSettingsView.swift */; };
+		F7A1CCA3F2550A7943F6F152 /* PetPointingFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = E608795799A0538873E90D60 /* PetPointingFrame.swift */; };
 		FEC7D03B6C125F1E92FD5FB1 /* WaitWhatTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6779F5C43884847CE81C1E8 /* WaitWhatTheme.swift */; };
 /* End PBXBuildFile section */
 
@@ -89,6 +90,7 @@
 		D77A3DDFE18708645B1B51B4 /* Hoot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Hoot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC1719A38A9E5E84779E725F /* JetBrainsMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-Medium.ttf"; sourceTree = "<group>"; };
 		E0580D0978F474A44EDF993A /* lotl.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = lotl.json; sourceTree = "<group>"; };
+		E608795799A0538873E90D60 /* PetPointingFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetPointingFrame.swift; sourceTree = "<group>"; };
 		EBFFC3D42C5DDC9F6C80692F /* HootController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HootController.swift; sourceTree = "<group>"; };
 		ECED11D8D6C953AF3D9F4B0F /* CartesiaTTSClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartesiaTTSClient.swift; sourceTree = "<group>"; };
 		EF119F016AA37AAC9E115C8C /* ViewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewHelpers.swift; sourceTree = "<group>"; };
@@ -192,6 +194,7 @@
 				BC71EAC5B80491130D88D9BB /* PetOverlayPieces.swift */,
 				97A44439E0D02B71456D6F27 /* PetOverlayScreenView.swift */,
 				2943B9C00B0DE7D0DA6BADD4 /* PetOverlaySupport.swift */,
+				E608795799A0538873E90D60 /* PetPointingFrame.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -330,6 +333,7 @@
 				5583F4B27A41DA74FBC1447F /* PetOverlayPieces.swift in Sources */,
 				01941E9D62CEB29E2F18C56B /* PetOverlayScreenView.swift in Sources */,
 				984666A80CC25358E0444DFE /* PetOverlaySupport.swift in Sources */,
+				F7A1CCA3F2550A7943F6F152 /* PetPointingFrame.swift in Sources */,
 				DE1EB4B07A98EDDDF05F4A97 /* PushToTalkKeyMonitor.swift in Sources */,
 				07B4203B12A890197C17592B /* RecentQuestionsStore.swift in Sources */,
 				3AD1146AA3E9AFC472354A30 /* ScreenCapturer.swift in Sources */,

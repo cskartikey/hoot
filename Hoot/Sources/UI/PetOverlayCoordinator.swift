@@ -68,6 +68,12 @@ final class PetOverlayCoordinator: ObservableObject {
 
     @Published private(set) var pointingTargetInGlobalSpace: CGPoint?
     @Published private(set) var isPointingRingShown = false
+    /// Index-card frame motion (POINTING.md): 0…1 in 8 steps over 240ms.
+    @Published private(set) var pointingFrameDrawProgress: CGFloat = 0
+    @Published private(set) var pointingFrameOpacity: Double = 0
+    @Published private(set) var pointingTabRiseOffset: CGFloat = 4
+    @Published private(set) var pointingTabOpacity: Double = 0
+    private var pointingFrameAnimationTask: Task<Void, Never>?
 
     @Published private(set) var lingerStartDate = Date()
 
@@ -466,6 +472,8 @@ final class PetOverlayCoordinator: ObservableObject {
             isFullBodyAwakeAfterLanding = false
             pointingTargetInGlobalSpace = nil
             isPointingRingShown = false
+            pointingFrameAnimationTask?.cancel()
+            pointingFrameOpacity = 0
         }
     }
 
@@ -511,21 +519,30 @@ final class PetOverlayCoordinator: ObservableObject {
             ?? NSScreen.screens.first?.frame
             ?? .zero
         let headHalfSide = Self.headSideLength / 2
-        // Land just outside the ring that wraps the element's real box.
-        let targetElementSize = hootController.detectedElementBoxSize ?? PetPointingRingView.defaultTargetBoxSize
-        let ringHalfWidth = PetPointingRingView.outerSize(forElementSize: targetElementSize).width / 2
-        let gapBetweenRingAndHead: CGFloat = 4
-        let headCenterXRightOfTarget = targetInGlobalSpace.x + ringHalfWidth + gapBetweenRingAndHead + headHalfSide
-        let headCenterXLeftOfTarget = targetInGlobalSpace.x - ringHalfWidth - gapBetweenRingAndHead - headHalfSide
+        // Land beside the index-card frame (POINTING.md): 10pt outside it,
+        // past the depth edge, on the side nearer the cursor, with the head's
+        // top 8pt below the frame's top. Global space has +y up.
+        let pointingFrameSize = PetPointingFrameView.paddedFrameSize(
+            forElementSize: hootController.detectedElementBoxSize,
+            screenSize: targetDisplayFrame.size
+        )
+        let frameHalfWidth = pointingFrameSize.width / 2
+        let gapBetweenFrameAndHead: CGFloat = 10
+        let headCenterXRightOfFrame = targetInGlobalSpace.x + frameHalfWidth + PetPointingFrameView.depthEdgeOutset
+            + gapBetweenFrameAndHead + headHalfSide
+        let headCenterXLeftOfFrame = targetInGlobalSpace.x - frameHalfWidth - gapBetweenFrameAndHead - headHalfSide
         let edgeMargin: CGFloat = 8
-        let fitsRightOfTarget = headCenterXRightOfTarget + headHalfSide <= targetDisplayFrame.maxX - edgeMargin
+        let fitsRightOfFrame = headCenterXRightOfFrame + headHalfSide <= targetDisplayFrame.maxX - edgeMargin
+        let fitsLeftOfFrame = headCenterXLeftOfFrame - headHalfSide >= targetDisplayFrame.minX + edgeMargin
+        let isCursorRightOfTarget = cursorLocation.x >= targetInGlobalSpace.x
+        let landsRightOfFrame = (isCursorRightOfTarget && fitsRightOfFrame) || !fitsLeftOfFrame
+        let frameTopY = targetInGlobalSpace.y + pointingFrameSize.height / 2
         let headDestination = CGPoint(
-            x: fitsRightOfTarget
-                ? headCenterXRightOfTarget
-                : max(targetDisplayFrame.minX + edgeMargin + headHalfSide, headCenterXLeftOfTarget),
-            // Slightly above the target's center (global +y is up).
+            x: landsRightOfFrame
+                ? min(headCenterXRightOfFrame, targetDisplayFrame.maxX - edgeMargin - headHalfSide)
+                : max(headCenterXLeftOfFrame, targetDisplayFrame.minX + edgeMargin + headHalfSide),
             y: min(
-                max(targetInGlobalSpace.y + 6, targetDisplayFrame.minY + edgeMargin + headHalfSide),
+                max(frameTopY - 8 - headHalfSide, targetDisplayFrame.minY + edgeMargin + headHalfSide),
                 targetDisplayFrame.maxY - edgeMargin - headHalfSide
             )
         )
@@ -542,11 +559,55 @@ final class PetOverlayCoordinator: ObservableObject {
             self.phase = .pointingAtTarget
             self.pointingStartDate = Date()
             self.isPointingRingShown = true
+            self.animatePointingFrameIn()
+        }
+    }
+
+    /// In: the frame draws clockwise in 8 steps over 240ms while the fill
+    /// fades in; the tab rises 4pt → 0 in 2 steps from 160ms. Reduce Motion
+    /// skips the draw for a quick fade.
+    private func animatePointingFrameIn() {
+        pointingFrameAnimationTask?.cancel()
+        pointingFrameOpacity = 1
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            pointingFrameDrawProgress = 1
+            pointingTabRiseOffset = 0
+            pointingTabOpacity = 1
+            return
+        }
+        pointingFrameDrawProgress = 0
+        pointingTabRiseOffset = 4
+        pointingTabOpacity = 0
+        pointingFrameAnimationTask = Task { @MainActor [weak self] in
+            for drawStep in 1...8 {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.pointingFrameDrawProgress = CGFloat(drawStep) / 8
+                if drawStep == 6 {
+                    self.pointingTabOpacity = 1
+                    self.pointingTabRiseOffset = 2
+                } else if drawStep == 8 {
+                    self.pointingTabRiseOffset = 0
+                }
+            }
+        }
+    }
+
+    /// Out: frame + tab fade to 0 in 3 steps over 150ms.
+    private func animatePointingFrameOut() {
+        pointingFrameAnimationTask?.cancel()
+        pointingFrameAnimationTask = Task { @MainActor [weak self] in
+            for fadeStep in 1...3 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.pointingFrameOpacity = 1 - Double(fadeStep) / 3
+            }
         }
     }
 
     private func flyBackToCursorAfterPointing() {
         isPointingRingShown = false
+        animatePointingFrameOut()
         phase = .flyingBackToCursor
         let cursorHeadSpot = headCenterBesideCursor(cursorLocation: NSEvent.mouseLocation)
         let flightDistance = hypot(cursorHeadSpot.x - petCenterInGlobalSpace.x, cursorHeadSpot.y - petCenterInGlobalSpace.y)
