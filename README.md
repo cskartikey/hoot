@@ -10,6 +10,14 @@ Structure:
 - `studio/` — explainer-video service: script → Cartesia narration → Manim animation → mp4.
 - `design/` — pixel pet sources exported from the Claude Design handoff.
 
+## Brain
+
+hoot thinks with Claude. The app speaks the Anthropic Messages API directly (`Hoot/Sources/Platform/LLMClient.swift`): every question goes out as one streamed request with the screenshots of all screens as image blocks, the tutor system prompt (`HootTutorPrompt.swift`), the conversation so far, and the YouTube transcript window; the reply streams back and is spoken sentence by sentence while it is still being written. The model picker in settings offers Claude Sonnet 5.5 (default) and Claude Opus 5.5. The worker's `POST /chat` forwards the body to Anthropic untouched and streams the SSE back; set `ANTHROPIC_API_KEY` in `worker/.dev.vars`.
+
+For development without an Anthropic key, `BRAIN=openai` in `worker/.dev.vars` makes the worker translate the same Anthropic-format request to OpenAI Chat Completions and answer in Anthropic's SSE shape, so the app is unchanged. The demo video was recorded on that fallback.
+
+Where the model can go wrong, and what hoot does about it: it can misread what is on screen or the transcript, so the prompt tells it to say when it isn't sure, to point at things rather than describe them, and never to invent screen content; a mis-aimed `[POINT:]` box is a visible, correctable mistake rather than a silent one. A wrong rewind only moves the video, which the learner sees and can undo. "Just do it" clicks only after the learner says so out loud, stops the instant they touch the mouse, and never types. Memory stays on the Mac and can be wiped from the panel.
+
 ## Voices
 
 hoot speaks through the worker's `POST /tts`, which returns one mp3 clip per sentence from one of two providers:
