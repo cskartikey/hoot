@@ -86,7 +86,9 @@ final class ExplainerSketchWebView: WKWebView {
         nextResponder?.scrollWheel(with: event)
     }
 
-    /// Not a drag handle: the panel moves by its background, but dragging
-    /// across the picture should not start moving the window.
-    override var mouseDownCanMoveWindow: Bool { false }
+    /// The sketch is a picture: no scripts, no links. Taking no clicks lets
+    /// them reach the SwiftUI controls drawn over it, above all the card's
+    /// hover × in the top-right corner, which an AppKit view underneath
+    /// otherwise swallows (the sketch "wouldn't close").
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
