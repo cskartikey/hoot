@@ -2,7 +2,8 @@
 //  HootController.swift
 //  Hoot
 //
-//  The coordinator: push-to-talk → screenshot (+ YouTube context) → LLM →
+//  The coordinator: push-to-talk → screenshot (+ YouTube context, the whole
+//  transcript when they ask to find a moment, answered with [SEEK:]) → LLM →
 //  streamed Cartesia speech, [POINT:] pointing, [VIDEO:] explainer
 //  requests, recent questions, memory ([CONCEPT:] capture, recall of past
 //  confusions into the prompt), spaced-review turns ([REVIEW:]) and hoot's
@@ -551,6 +552,9 @@ final class HootController: ObservableObject {
         /// Set when this reply ends with hoot's own question ([PREDICT] /
         /// [CHECK:]); the video then stays paused for the answer.
         var didAskAFollowUpQuestion = false
+        /// Set from a [SEEK:mm:ss] tag: once the reply is spoken, the video
+        /// jumps there and plays instead of merely resuming.
+        var seekTargetSecondsAfterSpeaking: Double?
         /// For a guess, the records (memory, recent) carry the question hoot
         /// deferred, not the guess itself.
         let questionTextForRecords = followUpQuestion?.kind == .prediction ? followUpQuestion!.subject : questionText
@@ -575,9 +579,18 @@ final class HootController: ObservableObject {
             var youTubeContextForExplainerVideo: StudioYouTubeContext?
             var memoryRecallQueryLines = [questionText]
             let didPauseYouTubeVideoForThisQuestion = await youTubePauseTask?.value ?? false
+            // "go back to where she explained X" needs the whole transcript,
+            // not the last ninety seconds, so the tutor can pick a [SEEK:].
+            let questionAsksToFindAMomentInTheVideo = reviewTurn == nil && followUpQuestion == nil
+                && HootTutorPrompt.questionAsksToFindAMomentInTheVideo(questionText)
             if didPauseYouTubeVideoForThisQuestion,
-               let youTubeLearningContext = await youTubeContextProvider.learningContextForMostRecentPausedVideo() {
+               let youTubeLearningContext = await youTubeContextProvider.learningContextForMostRecentPausedVideo(
+                   includeFullTranscriptForSeeking: questionAsksToFindAMomentInTheVideo
+               ) {
                 userPromptWithVideoContext += "\n\n" + youTubeLearningContext.promptContextBlock
+                if questionAsksToFindAMomentInTheVideo, youTubeLearningContext.fullTranscriptForSeekingText == nil {
+                    userPromptWithVideoContext += "\n\n(they asked to find a moment in the video, but this video has no transcript, so you can't rewind it. say so in one line and use [SEEK:none].)"
+                }
                 memoryRecallQueryLines.append(youTubeLearningContext.title)
                 memoryRecallQueryLines.append(contentsOf: Self.lastTranscriptLinesWithoutTimestamps(
                     youTubeLearningContext.transcriptWindowText,
@@ -589,7 +602,9 @@ final class HootController: ObservableObject {
                     t: youTubeLearningContext.currentTimeSeconds,
                     transcriptWindow: youTubeLearningContext.transcriptWindowText ?? ""
                 )
-                print("📺 YouTube context: \(youTubeLearningContext.title) at \(Int(youTubeLearningContext.currentTimeSeconds))s")
+                print("📺 YouTube context: \(youTubeLearningContext.title) at \(Int(youTubeLearningContext.currentTimeSeconds))s"
+                    + (youTubeLearningContext.fullTranscriptForSeekingText != nil ? " (+ full transcript for seeking)"
+                       : questionAsksToFindAMomentInTheVideo ? " (rewind asked, but no transcript)" : " (last 90s only; not a rewind question)"))
             }
             guard isCurrentGeneration(pipelineGeneration) else { return }
 
@@ -673,6 +688,24 @@ final class HootController: ObservableObject {
                 ? HootResponseTags.parseReviewResult(from: fullResponseText)
                 : nil
             let isGradedQuickCheckAnswer = quickCheckResult != nil
+            // A [SEEK:] moves the video when the question asked to find a
+            // moment (the tutor saw the whole transcript), or when the stamp
+            // lies inside the ninety-second window the tutor was shown ("play
+            // what he just said about orientation again"). Anything else is a
+            // stray tag and is ignored, so an ordinary answer never jumps.
+            if didPauseYouTubeVideoForThisQuestion,
+               let seekTargetSeconds = HootResponseTags.parseSeekTargetSeconds(from: fullResponseText) {
+                let currentVideoTimeSeconds = youTubeContextForExplainerVideo?.t ?? 0
+                let isInsideShownTranscriptWindow = seekTargetSeconds >= currentVideoTimeSeconds - 95 && seekTargetSeconds <= currentVideoTimeSeconds
+                if questionAsksToFindAMomentInTheVideo || isInsideShownTranscriptWindow {
+                    seekTargetSecondsAfterSpeaking = seekTargetSeconds
+                    print("⏪ Seek requested: \(YouTubeContextProvider.formatTimestampForTranscript(seekTargetSeconds))")
+                } else {
+                    print("⏪ Seek tag ignored (question didn't ask to find a moment and the stamp is outside the shown window): \(YouTubeContextProvider.formatTimestampForTranscript(seekTargetSeconds))")
+                }
+            } else if questionAsksToFindAMomentInTheVideo && didPauseYouTubeVideoForThisQuestion {
+                print("⏪ Rewind question, but the reply carried no usable [SEEK:] tag")
+            }
 
             // Remember what they got stuck on (skipped for chit-chat, for a
             // guess prompt, and for graded answers).
@@ -866,11 +899,14 @@ final class HootController: ObservableObject {
             onReviewForgotWithSavedVideo?(savedVideoEntryToOfferAfterForgottenReview)
         }
 
-        // The explainer panel resumes the video when it closes, and a
+        // A rewind answer jumps the video to the moment and plays it. Otherwise
+        // the explainer panel resumes the video when it closes, and a
         // question hoot asked keeps it paused for the answer (abandoning the
         // question resumes it); otherwise the answer is over, so give the
         // lecture back.
-        if !didRequestExplainerVideo && !didAskAFollowUpQuestion {
+        if let seekTargetSecondsAfterSpeaking {
+            await youTubeContextProvider.seekVideoAndPlay(toSeconds: seekTargetSecondsAfterSpeaking)
+        } else if !didRequestExplainerVideo && !didAskAFollowUpQuestion {
             await youTubeContextProvider.resumeVideoIfWePausedIt()
         }
     }

@@ -9,7 +9,8 @@
 //  [SKETCH:brief] for a quick animated sketch,
 //  [VIDEO:brief] for a narrated studio video), how to point at
 //  things ([POINT:x,y,w,h:label]), how to name the concept for memory
-//  ([CONCEPT:words]) and call back to earlier confusions. Review turns and
+//  ([CONCEPT:words]), how to rewind the video to where something was
+//  explained ([SEEK:mm:ss]) and call back to earlier confusions. Review turns and
 //  quick-check answers add a grading block ([REVIEW:result]).
 //  The buddy identity suffix is added per request so "who are you?" always
 //  matches the mascot currently picked in settings.
@@ -85,9 +86,12 @@ enum HootTutorPrompt {
     walkthroughs:
     only when they ask HOW TO DO something on the screen in front of them ("how do i share this doc?", "how do i turn on dark mode here?", "where do i change the font?"), guide them through it instead of describing it: two to five short sentences, one action each, and put a step tag inline right BEFORE each sentence: [STEP n/N POINT:x,y,w,h:label] with the same box rules as pointing (snug box around the control for that step, label one to three words, :screenN if it's on another screen). the box moves from step to step as you speak, then you wait and watch them do it. keep each sentence to the action ("click share.", "then switch this to anyone with the link."). box what is visible now; if a later step's control only appears after an earlier click, box the best current spot for it (the button that opens it). a walkthrough ends with [CONCEPT:none] [POINT:none], never a video, never a prediction or quick check. explanations of what something is or why it works are never walkthroughs.
 
+    rewinding the video:
+    when a video transcript is provided and they ask to find a moment in it ("go back to where she explained eigenvectors", "where did he define that?", "play the part about the chain rule again", "skip to when they get to backprop"), the prompt will include the whole transcript with timestamps. find the line where that thing is first actually explained (where the idea starts, not a later passing mention, and not the line where the word first appears in a preview), say in one short sentence where it is and what they'll hear ("she sets that up at six fifty-two, right after the area example. taking you there."), say the time the way a person would, then end with [SEEK:mm:ss] copying that line's stamp (use h:mm:ss if the stamp has hours). the video jumps there and plays when you finish talking, so don't re-explain the idea yourself: that's what the rewind is for. one sentence or two at most, no picture, no quick check, [CONCEPT:none], [POINT:none]. if nothing in the transcript matches, say so in one line and use [SEEK:none]. never use [SEEK:] when they didn't ask to go somewhere in the video.
+
     remembering:
     hoot keeps a private memory of what this learner got stuck on. right before the point tag, add [CONCEPT:words] where words is one to three lowercase words naming the idea they were confused about (for example [CONCEPT:determinants], [CONCEPT:javascript closures], [CONCEPT:learning rate]). name the underlying idea, not the screen or the question, and use the same name each time the same idea comes up. for chit-chat, greetings, or anything that isn't about learning something, use [CONCEPT:none].
-    the order of everything is: spoken text, then [SKETCH:...] or [VIDEO:...] if you want a panel picture, then [PREDICT] or [CHECK:...] if you asked them something, then [NAPKIN:...] if you drew one, then [CONCEPT:...], then [POINT:...], then any [DRAW:...] tags last. the only tags that ever go inside the spoken text are walkthrough [STEP ...] tags, one right before each step's sentence.
+    the order of everything is: spoken text, then [SKETCH:...] or [VIDEO:...] if you want a panel picture, then [PREDICT] or [CHECK:...] if you asked them something, then [NAPKIN:...] if you drew one, then [SEEK:...] if they asked to find a moment in the video, then [CONCEPT:...], then [POINT:...], then any [DRAW:...] tags last. the only tags that ever go inside the spoken text are walkthrough [STEP ...] tags, one right before each step's sentence.
 
     callbacks:
     sometimes the prompt lists things this learner got stuck on before. if one of them is genuinely the same idea as what they're asking now, connect it in one short clause ("this is the determinant idea from tuesday, just in 3D"). never force it, never list past topics, at most one callback per answer. if none of them is really the same idea, ignore the list.
@@ -102,6 +106,7 @@ enum HootTutorPrompt {
     - asks what an api is: "an api is a menu a program offers to other programs. you don't need to know how the kitchen works, you order off the menu and get your food back. [CONCEPT:apis] [POINT:none]"
     - lecture paused right before the speaker shows what a zero determinant does, asks "so what happens when it's zero?": "before i tell you, take a guess. the determinant is how much area gets stretched, so if it's zero, what happens to this square? [PREDICT] [CONCEPT:none] [POINT:470,250,340,260:the grid]"
     - in a google doc, asks "how do i share this with my study group?": "[STEP 1/3 POINT:1180,62,74,30:share] click share. [STEP 2/3 POINT:520,330,300,36:access] then switch this to anyone with the link. [STEP 3/3 POINT:470,420,110,32:copy link] then copy link and send it to them. [CONCEPT:none] [POINT:none]"
+    - watching a linear algebra lecture at 14:10, asks "can you go back to where she explained what a determinant is?": "she builds it up at six fifty-two, starting from how much the unit square stretches. taking you there. [SEEK:06:52] [CONCEPT:none] [POINT:none]"
     - asks "what's the learning rate? quiz me after": "that's the learning rate, how big a step the model takes each update. small steps are slow but steady, big ones overshoot. quick one: if the loss keeps bouncing around instead of settling, is the learning rate too big or too small? [CHECK:if the loss keeps bouncing around instead of settling, is the learning rate too big or too small?] [CONCEPT:learning rate] [POINT:488,208,52,26:learning rate]"
     """
 
@@ -156,6 +161,34 @@ enum HootTutorPrompt {
             return "(they asked for a picture out loud: you must include exactly one picture this time, a [NAPKIN:...] block unless motion is the point.)"
         }
         return nil
+    }
+
+    /// Whether the question might ask to find a moment in the video they're
+    /// watching ("go back to where", "where did he define", "play the part
+    /// about ... again"). When true the whole transcript is sent, not just
+    /// the last ninety seconds, so the tutor can answer with [SEEK:mm:ss].
+    /// Deliberately loose: a false positive only costs transcript tokens
+    /// (the prompt tells the tutor to answer normally if no rewind was
+    /// meant), while a miss makes the rewind impossible. Dictation varies
+    /// a lot ("can you rewind to...", "go to the part...", "when did she
+    /// introduce..."), so this matches single words, not fixed phrases.
+    static func questionAsksToFindAMomentInTheVideo(_ questionText: String) -> Bool {
+        let questionWords = Set(
+            questionText.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        )
+        func containsAny(_ words: [String]) -> Bool { words.contains { questionWords.contains($0) } }
+        // Words that on their own mean "move me in the video".
+        let seekVerbs = ["rewind", "replay", "skip", "jump", "scrub", "seek", "forward", "fast", "revisit"]
+        if containsAny(seekVerbs) { return true }
+        // "go back", "take me back", "back to", "once more", "say that again".
+        if containsAny(["back", "again", "more"]) && containsAny(["go", "take", "back", "to", "again", "once", "say", "hear", "play", "that", "it"]) { return true }
+        // "where did he explain X", "when does she introduce X", "which part covers X", "the part about X".
+        let locationWords = ["where", "when", "which", "part", "bit", "section", "moment", "point", "place", "spot", "time", "timestamp", "minute", "start", "beginning", "earlier", "before"]
+        let explainingWords = ["explain", "explains", "explained", "explaining", "define", "defines", "defined", "definition", "introduce", "introduces", "introduced", "mention", "mentions", "mentioned", "talk", "talks", "talked", "talking", "cover", "covers", "covered", "say", "says", "said", "show", "shows", "showed", "derive", "derives", "derived", "prove", "proves", "proved", "about", "discuss", "discusses", "discussed", "describe", "describes", "described", "go", "goes", "went", "get", "gets", "got", "come", "comes", "came", "bring", "brings", "brought", "first"]
+        if containsAny(locationWords) && containsAny(explainingWords) { return true }
+        return false
     }
 
     /// Appended when the "quick checks" setting is on.

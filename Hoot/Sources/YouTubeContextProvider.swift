@@ -6,7 +6,9 @@
 //  (Google Chrome, Arc, Brave, Edge or Safari), where they are in it, and what
 //  was said in the ninety seconds before that point. Pauses the video while the
 //  user asks a question and resumes it afterwards, but only if it was playing
-//  when we paused it.
+//  when we paused it. When the question asks to find a moment ("go back to
+//  where she explained X"), hands the tutor the whole transcript and can jump
+//  the video to the `[SEEK:mm:ss]` the tutor answers with.
 //
 //  Browser access goes through AppleScript (NSAppleScript). Every script runs on
 //  a background queue and gives up after about a second, so push-to-talk never
@@ -33,6 +35,12 @@ struct YouTubeLearningContext {
     /// up to it, one per line, each prefixed with a `[mm:ss]` stamp. Nil when the
     /// video has no English transcript or the worker could not be reached.
     let transcriptWindowText: String?
+    /// The whole transcript (capped around the current time, with a "you are
+    /// here" marker), only when the question asks to find a moment in the
+    /// video ("go back to where she explained X"), so the tutor can answer
+    /// with a `[SEEK:mm:ss]` tag. Nil otherwise: it is big, and most
+    /// questions are about what was just said.
+    let fullTranscriptForSeekingText: String?
 
     /// The text block to append to the user prompt sent to the tutor.
     var promptContextBlock: String {
@@ -43,6 +51,11 @@ struct YouTubeLearningContext {
         if let transcriptWindowText, !transcriptWindowText.isEmpty {
             promptContextLines.append("here's what was said in the last ninety seconds before they paused (the last lines are what the speaker just said):")
             promptContextLines.append(transcriptWindowText)
+        }
+        if let fullTranscriptForSeekingText, !fullTranscriptForSeekingText.isEmpty {
+            promptContextLines.append("")
+            promptContextLines.append("they may be asking you to find a moment in the video (to rewind, replay or skip to where something is explained), so here is the whole transcript with timestamps; the \"you are here\" line marks where they paused. if that's what they want: find the line where the thing they mean is first actually explained, not merely mentioned, and end your reply with [SEEK:mm:ss] using that line's stamp, as described under \"rewinding the video\". if they're asking an ordinary question instead, answer it the usual way and don't seek.")
+            promptContextLines.append(fullTranscriptForSeekingText)
         } else {
             promptContextLines.append("no transcript is available for this video, so rely on the screenshot.")
         }
@@ -140,22 +153,48 @@ final class YouTubeContextProvider: ObservableObject {
     /// How many seconds of transcript before the current time to give the tutor.
     private let transcriptWindowLengthSeconds: Double = 90
 
+    /// The most transcript text handed over for a seek question, in characters
+    /// (roughly 9k tokens, about forty minutes of lecture). Longer videos get
+    /// the part nearest the current time, weighted toward what was already
+    /// watched, because "go back to" is far more common than "skip ahead to".
+    private let fullTranscriptCharacterBudget = 36_000
+
     private let workerBaseURL: String
 
     /// Transcript segments per video id. An empty array means "this video has no
-    /// transcript" so we don't keep asking. Network failures are not cached.
+    /// transcript" (see `noTranscriptNotedAtByVideoId` for how long that is
+    /// believed). Network failures are not cached.
     private var cachedTranscriptSegmentsByVideoId: [String: [YouTubeTranscriptSegment]] = [:]
+    /// When the worker last said a video has no transcript, so the answer expires.
+    private var noTranscriptNotedAtByVideoId: [String: Date] = [:]
 
     /// In-flight transcript downloads, so a prefetch on key-down and the real
     /// fetch after transcription share one request.
     private var inFlightTranscriptFetchTasksByVideoId: [String: Task<[YouTubeTranscriptSegment]?, Never>] = [:]
 
+    /// Generous, because the worker's lookup can take ten seconds or more on
+    /// a cold video (YouTube's player endpoint is slow, and the watch-page
+    /// fallback downloads a megabyte and a half). The download starts on
+    /// key-down and keeps going in the background; how long an answer waits
+    /// for it is decided separately (`secondsToWaitForTranscript...`).
     private let transcriptURLSession: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 8
+        configuration.timeoutIntervalForRequest = 25
+        configuration.timeoutIntervalForResource = 30
         return URLSession(configuration: configuration)
     }()
+
+    /// How long an ordinary question waits for a transcript still on its way
+    /// before answering from the screenshot alone (the download continues
+    /// and is cached for the next ask).
+    private let secondsToWaitForTranscriptForAnOrdinaryQuestion: Double = 6
+    /// A rewind question is useless without the transcript, so it waits
+    /// about as long as the worker could possibly take.
+    private let secondsToWaitForTranscriptForARewindQuestion: Double = 28
+    /// A "no transcript" answer is remembered only this long: YouTube's
+    /// caption endpoints are flaky, and a transient miss must not turn a
+    /// whole viewing session into "this video has no transcript".
+    private let secondsANoTranscriptAnswerIsRemembered: Double = 120
 
     init(workerBaseURL: String = "http://localhost:8787") {
         self.workerBaseURL = workerBaseURL
@@ -192,9 +231,11 @@ final class YouTubeContextProvider: ObservableObject {
         }
         didWePauseTheMostRecentVideo = false
 
-        let resumeAppleScriptSource = Self.buildResumeAppleScriptSource(
+        let resumeAppleScriptSource = Self.buildAppleScriptSourceForTabOnVideo(
             browser: pausedVideoSnapshot.browser,
-            videoId: pausedVideoSnapshot.videoId
+            videoId: pausedVideoSnapshot.videoId,
+            tabJavaScript: Self.buildResumeJavaScript(videoId: pausedVideoSnapshot.videoId),
+            timeoutSeconds: Self.appleScriptTimeoutSeconds
         )
         let resumeExecutionResult = await YouTubeBrowserAppleScriptRunner.runAppleScriptOffMainThread(
             appleScriptSource: resumeAppleScriptSource,
@@ -206,19 +247,81 @@ final class YouTubeContextProvider: ObservableObject {
         }
     }
 
+    /// Call when the tutor answered with a `[SEEK:]` tag: jumps the video to
+    /// `targetSeconds` (a little earlier, so the first word isn't clipped) and
+    /// plays it, whether or not it was playing before: they asked to go there.
+    /// Clears the resume flag so the usual end-of-answer resume doesn't fire
+    /// on top of it. Only acts on the video the question was asked over.
+    func seekVideoAndPlay(toSeconds targetSeconds: Double) async {
+        guard let pausedVideoSnapshot = mostRecentPausedVideoSnapshot else {
+            print("⚠️ YouTube seek skipped: no video snapshot for this question")
+            return
+        }
+        didWePauseTheMostRecentVideo = false
+
+        let seekTargetSeconds = max(0, targetSeconds - Self.seekLeadInSeconds)
+        let seekAppleScriptSource = Self.buildAppleScriptSourceForTabOnVideo(
+            browser: pausedVideoSnapshot.browser,
+            videoId: pausedVideoSnapshot.videoId,
+            tabJavaScript: Self.buildSeekAndPlayJavaScript(videoId: pausedVideoSnapshot.videoId, targetSeconds: seekTargetSeconds),
+            timeoutSeconds: Self.seekAppleScriptTimeoutSeconds
+        )
+        // The answer is over, so nothing waits on this: give the browser a
+        // few seconds and try once more if it didn't land, because the seek
+        // is the whole point of a rewind answer.
+        for attemptNumber in 1...2 {
+            let seekExecutionResult = await YouTubeBrowserAppleScriptRunner.runAppleScriptOffMainThread(
+                appleScriptSource: seekAppleScriptSource,
+                timeoutSeconds: Self.seekAppleScriptTimeoutSeconds
+            )
+            switch seekExecutionResult {
+            case .succeeded(let scriptResultString):
+                print("⏪ YouTube seek to \(Self.formatTimestampForTranscript(seekTargetSeconds)) (attempt \(attemptNumber)): \(scriptResultString)")
+                if scriptResultString.contains("\"sought\":true") { return }
+            case .failed(let errorNumber, let errorMessage):
+                print("⚠️ YouTube seek failed (\(errorNumber)): \(errorMessage)")
+                updateBrowserSetupProblemMessage(browser: pausedVideoSnapshot.browser, errorNumber: errorNumber, errorMessage: errorMessage)
+                return
+            case .timedOut:
+                print("⚠️ YouTube seek attempt \(attemptNumber) timed out; the browser didn't answer within \(Self.seekAppleScriptTimeoutSeconds)s")
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+    }
+
+    /// Seeks land this many seconds before the transcript stamp, because a
+    /// caption's stamp is when its first word is spoken.
+    private static let seekLeadInSeconds: Double = 1.5
+
+    /// Seeking runs after the answer, so unlike the pause on key-down it can
+    /// afford to wait for a busy browser (and for an earlier script still
+    /// queued ahead of it on the serial AppleScript queue).
+    private static let seekAppleScriptTimeoutSeconds: Double = 4.0
+
     // MARK: Learning context
 
     /// Builds the context for the video paused by the most recent `pauseVideo()` call.
-    func learningContextForMostRecentPausedVideo() async -> YouTubeLearningContext? {
+    /// Pass `includeFullTranscriptForSeeking` when the question asks to find a
+    /// moment in the video, so the tutor sees the whole transcript, not just
+    /// the last ninety seconds.
+    func learningContextForMostRecentPausedVideo(includeFullTranscriptForSeeking: Bool = false) async -> YouTubeLearningContext? {
         guard let mostRecentPausedVideoSnapshot else { return nil }
-        return await learningContext(for: mostRecentPausedVideoSnapshot)
+        return await learningContext(for: mostRecentPausedVideoSnapshot, includeFullTranscriptForSeeking: includeFullTranscriptForSeeking)
     }
 
     /// Builds the context for a snapshot: title, timestamp and the ~90 seconds of
     /// transcript before the current time. Never throws; a missing transcript just
     /// leaves `transcriptWindowText` nil so the tutor falls back to the screenshot.
-    func learningContext(for playbackSnapshot: YouTubeVideoPlaybackSnapshot) async -> YouTubeLearningContext {
-        let transcriptSegments = await transcriptSegments(videoId: playbackSnapshot.videoId)
+    func learningContext(
+        for playbackSnapshot: YouTubeVideoPlaybackSnapshot,
+        includeFullTranscriptForSeeking: Bool = false
+    ) async -> YouTubeLearningContext {
+        let transcriptSegments = await transcriptSegments(
+            videoId: playbackSnapshot.videoId,
+            waitingAtMostSeconds: includeFullTranscriptForSeeking
+                ? secondsToWaitForTranscriptForARewindQuestion
+                : secondsToWaitForTranscriptForAnOrdinaryQuestion
+        )
         let transcriptWindowText = transcriptSegments.flatMap { segments in
             Self.formatTranscriptWindow(
                 transcriptSegments: segments,
@@ -226,11 +329,21 @@ final class YouTubeContextProvider: ObservableObject {
                 windowLengthSeconds: transcriptWindowLengthSeconds
             )
         }
+        let fullTranscriptForSeekingText = includeFullTranscriptForSeeking
+            ? transcriptSegments.flatMap { segments in
+                Self.formatFullTranscriptForSeeking(
+                    transcriptSegments: segments,
+                    currentTimeSeconds: playbackSnapshot.currentTimeSeconds,
+                    characterBudget: fullTranscriptCharacterBudget
+                )
+            }
+            : nil
         return YouTubeLearningContext(
             videoId: playbackSnapshot.videoId,
             title: playbackSnapshot.title,
             currentTimeSeconds: playbackSnapshot.currentTimeSeconds,
-            transcriptWindowText: transcriptWindowText
+            transcriptWindowText: transcriptWindowText,
+            fullTranscriptForSeekingText: fullTranscriptForSeekingText
         )
     }
 
@@ -243,56 +356,105 @@ final class YouTubeContextProvider: ObservableObject {
 
     // MARK: Transcript fetching and caching
 
+    /// Starts the download on key-down so it is usually cached by the time
+    /// the question is transcribed. The wait here only bounds this task; the
+    /// download itself runs to completion either way.
     private func prefetchTranscript(videoId: String) {
-        Task { _ = await transcriptSegments(videoId: videoId) }
+        Task { _ = await transcriptSegments(videoId: videoId, waitingAtMostSeconds: secondsToWaitForTranscriptForARewindQuestion) }
     }
 
-    /// Returns cached segments, joins an in-flight download, or starts one.
-    /// Returns nil when the video has no transcript or the worker is unreachable.
-    private func transcriptSegments(videoId: String) async -> [YouTubeTranscriptSegment]? {
+    /// Returns cached segments, joins an in-flight download, or starts one,
+    /// but waits at most `waitingAtMostSeconds`: past that the caller goes on
+    /// without a transcript while the download finishes in the background
+    /// and lands in the cache for the next ask. Returns nil when the video
+    /// has no transcript, the worker is unreachable, or the wait ran out.
+    private func transcriptSegments(videoId: String, waitingAtMostSeconds: Double) async -> [YouTubeTranscriptSegment]? {
         if let cachedTranscriptSegments = cachedTranscriptSegmentsByVideoId[videoId] {
-            return cachedTranscriptSegments.isEmpty ? nil : cachedTranscriptSegments
-        }
-        if let inFlightTranscriptFetchTask = inFlightTranscriptFetchTasksByVideoId[videoId] {
-            return await inFlightTranscriptFetchTask.value
+            if !cachedTranscriptSegments.isEmpty { return cachedTranscriptSegments }
+            // A "no transcript" answer is believed for a while, then asked again.
+            if let noTranscriptNotedAt = noTranscriptNotedAtByVideoId[videoId],
+               Date().timeIntervalSince(noTranscriptNotedAt) < secondsANoTranscriptAnswerIsRemembered {
+                return nil
+            }
+            cachedTranscriptSegmentsByVideoId[videoId] = nil
         }
 
-        let transcriptFetchTask = Task<[YouTubeTranscriptSegment]?, Never> {
-            await downloadTranscriptSegmentsFromWorker(videoId: videoId)
+        let transcriptFetchTask: Task<[YouTubeTranscriptSegment]?, Never>
+        if let inFlightTranscriptFetchTask = inFlightTranscriptFetchTasksByVideoId[videoId] {
+            transcriptFetchTask = inFlightTranscriptFetchTask
+        } else {
+            transcriptFetchTask = Task<[YouTubeTranscriptSegment]?, Never> { [weak self] in
+                // One retry: YouTube's caption endpoints fail transiently, and
+                // the worker answers 503 for exactly that case.
+                var downloadedSegments = await self?.downloadTranscriptSegmentsFromWorker(videoId: videoId)
+                if case .retryLater? = downloadedSegments {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    downloadedSegments = await self?.downloadTranscriptSegmentsFromWorker(videoId: videoId)
+                }
+                if case .segments(let segments)? = downloadedSegments { return segments }
+                return nil
+            }
+            inFlightTranscriptFetchTasksByVideoId[videoId] = transcriptFetchTask
+            Task { [weak self] in
+                _ = await transcriptFetchTask.value
+                self?.inFlightTranscriptFetchTasksByVideoId[videoId] = nil
+            }
         }
-        inFlightTranscriptFetchTasksByVideoId[videoId] = transcriptFetchTask
-        let downloadedTranscriptSegments = await transcriptFetchTask.value
-        inFlightTranscriptFetchTasksByVideoId[videoId] = nil
-        return downloadedTranscriptSegments
+
+        // Race the download against the wait; the download itself is never cancelled.
+        return await withTaskGroup(of: [YouTubeTranscriptSegment]??.self) { taskGroup in
+            taskGroup.addTask { await transcriptFetchTask.value }
+            taskGroup.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(waitingAtMostSeconds * 1_000_000_000))
+                return .none
+            }
+            let firstToFinish = await taskGroup.next() ?? .none
+            taskGroup.cancelAll()
+            if case .some(let segments) = firstToFinish { return segments }
+            print("⏳ Transcript for YouTube video \(videoId) is still downloading after \(Int(waitingAtMostSeconds))s; answering without it")
+            return nil
+        }
     }
 
-    private func downloadTranscriptSegmentsFromWorker(videoId: String) async -> [YouTubeTranscriptSegment]? {
-        guard let transcriptURL = URL(string: "\(workerBaseURL)/youtube/\(videoId)/transcript") else { return nil }
+    private enum TranscriptDownloadOutcome {
+        case segments([YouTubeTranscriptSegment])
+        case noTranscript
+        case retryLater
+        case failed
+    }
+
+    private func downloadTranscriptSegmentsFromWorker(videoId: String) async -> TranscriptDownloadOutcome {
+        guard let transcriptURL = URL(string: "\(workerBaseURL)/youtube/\(videoId)/transcript") else { return .failed }
 
         struct WorkerTranscriptResponse: Decodable {
             let segments: [YouTubeTranscriptSegment]
         }
 
+        let startedAt = Date()
         do {
             let (responseData, urlResponse) = try await transcriptURLSession.data(from: transcriptURL)
             let httpStatusCode = (urlResponse as? HTTPURLResponse)?.statusCode ?? 0
+            let elapsedSeconds = String(format: "%.1fs", Date().timeIntervalSince(startedAt))
             if httpStatusCode == 404 {
-                // The video genuinely has no English transcript; remember that.
+                // The video has no English transcript, as far as YouTube says
+                // right now; remembered for a couple of minutes, not forever.
                 cachedTranscriptSegmentsByVideoId[videoId] = []
-                print("📺 No transcript available for YouTube video \(videoId)")
-                return nil
+                noTranscriptNotedAtByVideoId[videoId] = Date()
+                print("📺 No transcript available for YouTube video \(videoId) (\(elapsedSeconds))")
+                return .noTranscript
             }
             guard httpStatusCode == 200 else {
-                print("⚠️ YouTube transcript fetch for \(videoId) returned HTTP \(httpStatusCode)")
-                return nil
+                print("⚠️ YouTube transcript fetch for \(videoId) returned HTTP \(httpStatusCode) after \(elapsedSeconds)")
+                return httpStatusCode == 503 || httpStatusCode == 502 ? .retryLater : .failed
             }
             let workerTranscriptResponse = try JSONDecoder().decode(WorkerTranscriptResponse.self, from: responseData)
+            guard !workerTranscriptResponse.segments.isEmpty else { return .retryLater }
             cachedTranscriptSegmentsByVideoId[videoId] = workerTranscriptResponse.segments
-            print("📺 Cached \(workerTranscriptResponse.segments.count) transcript segments for YouTube video \(videoId)")
-            return workerTranscriptResponse.segments.isEmpty ? nil : workerTranscriptResponse.segments
+            print("📺 Cached \(workerTranscriptResponse.segments.count) transcript segments for YouTube video \(videoId) (\(elapsedSeconds))")
+            return .segments(workerTranscriptResponse.segments)
         } catch {
-            print("⚠️ YouTube transcript fetch for \(videoId) failed: \(error.localizedDescription)")
-            return nil
+            print("⚠️ YouTube transcript fetch for \(videoId) failed after \(String(format: "%.1fs", Date().timeIntervalSince(startedAt))): \(error.localizedDescription)")
+            return .failed
         }
     }
 
@@ -326,6 +488,69 @@ final class YouTubeContextProvider: ObservableObject {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    /// The whole transcript as "[mm:ss] text" lines with a "you are here" marker
+    /// at `currentTimeSeconds`, trimmed to `characterBudget` by dropping the
+    /// lines furthest from the current time: what was watched keeps about two
+    /// thirds of the budget, what is still to come gets the rest, and either
+    /// side takes over space the other doesn't need. Nil for an empty transcript.
+    static func formatFullTranscriptForSeeking(
+        transcriptSegments: [YouTubeTranscriptSegment],
+        currentTimeSeconds: Double,
+        characterBudget: Int
+    ) -> String? {
+        guard !transcriptSegments.isEmpty else { return nil }
+        let formattedLines = transcriptSegments.map { segment in
+            "[\(formatTimestampForTranscript(segment.start))] \(segment.text)"
+        }
+        let firstLineIndexAfterCurrentTime = transcriptSegments.firstIndex { $0.start > currentTimeSeconds } ?? transcriptSegments.count
+        let linesBefore = Array(formattedLines[..<firstLineIndexAfterCurrentTime])
+        let linesAfter = Array(formattedLines[firstLineIndexAfterCurrentTime...])
+
+        func characterCount(of lines: [String]) -> Int { lines.reduce(0) { $0 + $1.count + 1 } }
+        let preferredBudgetBefore = characterBudget * 2 / 3
+        let budgetBefore = max(preferredBudgetBefore, characterBudget - characterCount(of: linesAfter))
+        var keptLinesBefore: [String] = []
+        var charactersBefore = 0
+        for line in linesBefore.reversed() {
+            if charactersBefore + line.count + 1 > budgetBefore { break }
+            keptLinesBefore.insert(line, at: 0)
+            charactersBefore += line.count + 1
+        }
+        let budgetAfter = characterBudget - charactersBefore
+        var keptLinesAfter: [String] = []
+        var charactersAfter = 0
+        for line in linesAfter {
+            if charactersAfter + line.count + 1 > budgetAfter { break }
+            keptLinesAfter.append(line)
+            charactersAfter += line.count + 1
+        }
+
+        var outputLines: [String] = []
+        if keptLinesBefore.count < linesBefore.count { outputLines.append("[... earlier part of the video left out ...]") }
+        outputLines.append(contentsOf: keptLinesBefore)
+        outputLines.append("---- you are here (\(formatTimestampForTranscript(currentTimeSeconds))) ----")
+        outputLines.append(contentsOf: keptLinesAfter)
+        if keptLinesAfter.count < linesAfter.count { outputLines.append("[... rest of the video left out ...]") }
+        return outputLines.joined(separator: "\n")
+    }
+
+    /// "6:52" → 412, "1:02:05" → 3725, "412" → 412. Nil for anything else
+    /// (including "none"), so a malformed seek tag is ignored, never acted on.
+    static func parseTimestampToSeconds(_ timestampText: String) -> Double? {
+        // Keep only digits, colons and dots, so "at 6:52", "06:52s" or a stray
+        // quote around the stamp still parse; "none" becomes empty and fails.
+        let trimmedTimestampText = timestampText.filter { $0.isNumber || $0 == ":" || $0 == "." }
+        guard !trimmedTimestampText.isEmpty else { return nil }
+        let timestampParts = trimmedTimestampText.split(separator: ":").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard (1...3).contains(timestampParts.count) else { return nil }
+        var totalSeconds: Double = 0
+        for timestampPart in timestampParts {
+            guard let partValue = Double(timestampPart), partValue >= 0 else { return nil }
+            totalSeconds = totalSeconds * 60 + partValue
+        }
+        return totalSeconds
     }
 
     // MARK: Video id parsing
@@ -521,11 +746,10 @@ final class YouTubeContextProvider: ObservableObject {
         }
     }
 
-    /// AppleScript that finds the first tab on `videoId` (the user may have switched
-    /// tabs while we were answering) and plays the video if it is paused.
-    private static func buildResumeAppleScriptSource(browser: YouTubeSupportedBrowser, videoId: String) -> String {
-        // videoId was validated to [A-Za-z0-9_-]{11}, so it is safe to embed directly.
-        let resumeJavaScript = """
+    /// JavaScript that plays the video if it is paused. `videoId` was validated
+    /// to [A-Za-z0-9_-]{11}, so it is safe to embed directly.
+    private static func buildResumeJavaScript(videoId: String) -> String {
+        """
         (function () {
           if (location.href.indexOf('\(videoId)') === -1) { return 'WRONG_VIDEO'; }
           var moviePlayer = document.getElementById('movie_player');
@@ -537,8 +761,41 @@ final class YouTubeContextProvider: ObservableObject {
           return 'RESUMED';
         })();
         """
-        let escapedResumeJavaScript = escapeForAppleScriptStringLiteral(resumeJavaScript)
-        let timeoutWholeSeconds = Int(appleScriptTimeoutSeconds.rounded(.up))
+    }
+
+    /// JavaScript that jumps to `targetSeconds` and plays. YouTube's own
+    /// `seekTo` keeps the progress bar and captions in sync; the raw <video>
+    /// element is the fallback. `targetSeconds` is a number we computed, never
+    /// model text, so it is safe to interpolate.
+    private static func buildSeekAndPlayJavaScript(videoId: String, targetSeconds: Double) -> String {
+        let formattedTargetSeconds = String(format: "%.1f", targetSeconds)
+        return """
+        (function () {
+          if (location.href.indexOf('\(videoId)') === -1) { return 'WRONG_VIDEO'; }
+          var moviePlayer = document.getElementById('movie_player');
+          var video = document.querySelector('ytd-reel-video-renderer[is-active] video')
+            || document.querySelector('#movie_player video')
+            || document.querySelector('video');
+          if (!video) { return 'NO_VIDEO'; }
+          var target = \(formattedTargetSeconds);
+          if (moviePlayer && typeof moviePlayer.seekTo === 'function') { moviePlayer.seekTo(target, true); } else { video.currentTime = target; }
+          if (moviePlayer && typeof moviePlayer.playVideo === 'function') { moviePlayer.playVideo(); } else { video.play(); }
+          var landed = Math.abs(video.currentTime - target) < 3;
+          return JSON.stringify({ sought: landed, currentTime: video.currentTime, paused: video.paused });
+        })();
+        """
+    }
+
+    /// AppleScript that finds the first tab on `videoId` (the user may have switched
+    /// tabs while we were answering) and runs `tabJavaScript` in it.
+    private static func buildAppleScriptSourceForTabOnVideo(
+        browser: YouTubeSupportedBrowser,
+        videoId: String,
+        tabJavaScript: String,
+        timeoutSeconds: Double
+    ) -> String {
+        let escapedResumeJavaScript = escapeForAppleScriptStringLiteral(tabJavaScript)
+        let timeoutWholeSeconds = Int(timeoutSeconds.rounded(.up))
 
         switch browser {
         case .chromiumBased(let bundleIdentifier, _):

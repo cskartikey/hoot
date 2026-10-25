@@ -218,6 +218,14 @@ enum HootResponseTags {
         return seenTagNames
     }
 
+    /// The moment to jump the video to, in seconds, from [SEEK:mm:ss]
+    /// (also h:mm:ss or plain seconds). Nil for [SEEK:none], a missing tag,
+    /// or anything that doesn't parse, so a garbled tag never moves the video.
+    static func parseSeekTargetSeconds(from responseText: String) -> Double? {
+        guard let rawSeekTarget = firstTagValue(named: "SEEK", in: responseText) else { return nil }
+        return YouTubeContextProvider.parseTimestampToSeconds(rawSeekTarget)
+    }
+
     /// The grade from [REVIEW:remembered|shaky|forgot], or nil.
     static func parseReviewResult(from responseText: String) -> ReviewResult? {
         guard let rawReviewResult = firstTagValue(named: "REVIEW", in: responseText) else { return nil }
