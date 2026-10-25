@@ -282,23 +282,44 @@ final class HootController: ObservableObject {
     @Published private(set) var walkthrough: HootWalkthroughState?
     private var walkthroughRunner: HootWalkthroughRunner?
 
+    /// Each step's spoken sentence, by step index, recorded as the sentences
+    /// are handed to TTS. The "just do it" locate call describes the step
+    /// with it, and a later bare "just do it" narrates the steps from it.
+    private var walkthroughSentenceTextByStepIndex: [Int: String] = [:]
+
     /// Ends and forgets the walkthrough (a new question, stop).
     private func endWalkthrough() {
         walkthroughRunner?.end()
         walkthroughRunner = nil
         walkthrough = nil
+        walkthroughSentenceTextByStepIndex = [:]
+        justDoItSession?.executionTask?.cancel()
+        justDoItSession = nil
     }
 
     /// Parses any step tags that have completed in the stream so far and
     /// resolves the new ones to global coordinates, so step k's frame is
-    /// ready before sentence k's clip starts.
-    private func noteWalkthroughSteps(inStreamingResponse accumulatedResponseText: String, capturedScreens: [CapturedScreen]) {
+    /// ready before sentence k's clip starts. With `startsJustDoItExecution`
+    /// the first step also starts hoot's own clicking (MARK: Just do it).
+    private func noteWalkthroughSteps(
+        inStreamingResponse accumulatedResponseText: String,
+        capturedScreens: [CapturedScreen],
+        startsJustDoItExecution: Bool,
+        pipelineGeneration: Int
+    ) {
         let parsedSteps = HootWalkthroughTags.parseSteps(from: accumulatedResponseText)
         guard !parsedSteps.isEmpty else { return }
         let totalStepCount = parsedSteps.map(\.totalStepCount).max() ?? parsedSteps.count
         if walkthroughRunner == nil {
             walkthroughRunner = HootWalkthroughRunner(totalStepCount: totalStepCount) { [weak self] updatedState in
                 self?.walkthrough = updatedState
+            }
+            if startsJustDoItExecution, justDoItSession == nil {
+                let session = JustDoItSession(mode: .freshQuestion)
+                justDoItSession = session
+                session.executionTask = Task { [weak self] in
+                    await self?.executeJustDoItSteps(session: session, pipelineGeneration: pipelineGeneration)
+                }
             }
         }
         guard let walkthroughRunner else { return }
@@ -331,23 +352,257 @@ final class HootController: ObservableObject {
     /// the answer generation like the rest of the pipeline.
     private func runWalkthroughWatchAndConfirm(question: String, capturedScreens: [CapturedScreen], pipelineGeneration: Int) async {
         guard let walkthroughRunner, walkthroughRunner.hasSteps else { return }
+        // The steps have been spoken: a bare "just do it" on the next hold
+        // can now execute them (MARK: Just do it).
+        recentWalkthroughForFollowUp = RecentWalkthroughForFollowUp(
+            steps: walkthroughRunner.state.steps,
+            totalStepCount: walkthroughRunner.state.totalStepCount,
+            sentenceTextByStepIndex: walkthroughSentenceTextByStepIndex,
+            question: question,
+            date: Date()
+        )
         await walkthroughRunner.runWatchAndConfirm(
             question: question,
             beforeScreens: capturedScreens,
             llmClient: llmClient,
             speak: { [weak self] sentence in
-                guard let self, self.isCurrentGeneration(pipelineGeneration) else { return }
-                self.streamingResponseText = sentence
-                try? await self.cartesiaTTSClient.speakText(sentence)
-                while self.cartesiaTTSClient.isPlaying, self.isCurrentGeneration(pipelineGeneration) {
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                }
+                await self?.speakOneSentenceAndWait(sentence, pipelineGeneration: pipelineGeneration)
             },
             isCancelled: { [weak self] in
                 guard let self else { return true }
                 return !self.isCurrentGeneration(pipelineGeneration)
             }
         )
+    }
+
+    /// Says one sentence with Cartesia (shown in the bubble) and returns
+    /// once it has been heard, or as soon as a newer question takes over.
+    private func speakOneSentenceAndWait(_ sentence: String, pipelineGeneration: Int) async {
+        guard isCurrentGeneration(pipelineGeneration) else { return }
+        streamingResponseText = sentence
+        try? await cartesiaTTSClient.speakText(sentence)
+        while cartesiaTTSClient.isPlaying, isCurrentGeneration(pipelineGeneration) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    // MARK: - Just do it
+
+    /// Hoot's own execution of a walkthrough, when the learner explicitly
+    /// asked for it ("how do i share this, just do it"; or a bare "you do
+    /// it" right after a walkthrough). Alive from the first step tag (or
+    /// the follow-up hold) until the last click or a stop. The executor
+    /// (`HootWalkthroughExecutor`) moves the cursor and clicks; this
+    /// session is the bookkeeping between the voice, the stream and it.
+    private final class JustDoItSession {
+        enum Mode {
+            /// The tutor is answering a fresh question with step tags; each
+            /// step is clicked once its sentence has been spoken.
+            case freshQuestion
+            /// The steps of the walkthrough hoot gave a moment ago; every
+            /// box is re-located because the screen has moved on since.
+            case followUpOnRecentWalkthrough
+        }
+        let mode: Mode
+        let executor = HootWalkthroughExecutor()
+        /// Steps whose sentence TTS has started. A step is never clicked
+        /// before hoot has begun saying it.
+        var startedStepIndices: Set<Int> = []
+        /// Set once the tutor's stream ended, so the executor knows the
+        /// step list is final.
+        var hasStreamFinished = false
+        var executionTask: Task<Void, Never>?
+        var stopReason: HootWalkthroughExecutionStop?
+        var clickedStepCount = 0
+
+        init(mode: Mode) {
+            self.mode = mode
+        }
+    }
+    private var justDoItSession: JustDoItSession?
+
+    /// The last walkthrough hoot spoke (its boxes and sentences), kept so a
+    /// following bare "just do it" can execute it without asking the tutor
+    /// again. Dropped by the next ordinary question or after a while.
+    private struct RecentWalkthroughForFollowUp {
+        let steps: [HootWalkthroughStep]
+        let totalStepCount: Int
+        let sentenceTextByStepIndex: [Int: String]
+        let question: String
+        let date: Date
+    }
+    private var recentWalkthroughForFollowUp: RecentWalkthroughForFollowUp?
+    private static let secondsARecentWalkthroughCanBeExecuted: TimeInterval = 120
+    /// Between the frame landing on a step and the cursor leaving for it,
+    /// so the learner reads frame → cursor flies → click, not all at once.
+    private static let secondsBetweenFrameLandingAndCursorFlight: TimeInterval = 0.3
+    /// The executor gives up on a step whose sentence never starts (a long
+    /// stall) instead of keeping the pipeline alive forever.
+    private static let secondsToWaitForAStepSentenceToStart: TimeInterval = 45
+
+    /// The recent walkthrough a bare "just do it" would execute, if there
+    /// is one and it is fresh enough.
+    private func recentWalkthroughToExecute(forQuestion questionText: String) -> RecentWalkthroughForFollowUp? {
+        guard HootTutorPrompt.isBareDoItRequest(questionText),
+              let recentWalkthrough = recentWalkthroughForFollowUp,
+              Date().timeIntervalSince(recentWalkthrough.date) <= Self.secondsARecentWalkthroughCanBeExecuted else {
+            return nil
+        }
+        return recentWalkthrough
+    }
+
+    /// Clicks the walkthrough's steps one at a time, in order. For each
+    /// step: wait until hoot has started saying its sentence; from step two
+    /// on (or for every step of a follow-up) take a fresh screenshot and
+    /// ask where the control is now; slide the frame there; fly the cursor
+    /// and click; let the UI settle. Stops at the first reason to (the
+    /// learner moved the mouse, a control couldn't be found, a target off
+    /// every screen, the explainer panel, a newer question).
+    private func executeJustDoItSteps(session: JustDoItSession, pipelineGeneration: Int) async {
+        let isCancelled: () -> Bool = { [weak self] in
+            guard let self else { return true }
+            return !self.isCurrentGeneration(pipelineGeneration)
+        }
+        func stop(_ reason: HootWalkthroughExecutionStop) {
+            session.stopReason = reason
+            print("🖱️ just do it stopped: \(reason)")
+            // Nothing more is going to be clicked, so stop narrating clicks
+            // that won't happen; the stop sentence is spoken by the pipeline.
+            if reason != .cancelled { cartesiaTTSClient.stopPlayback() }
+        }
+
+        var stepIndex = 0
+        while stepIndex < HootWalkthroughExecutor.maximumStepCount {
+            // Wait for the step to exist and for its sentence to have started.
+            let waitStartDate = Date()
+            while !(session.startedStepIndices.contains(stepIndex) && (walkthroughRunner?.state.steps.indices.contains(stepIndex) ?? false)) {
+                if isCancelled() { session.stopReason = .cancelled; return }
+                if session.hasStreamFinished, let runner = walkthroughRunner, stepIndex >= runner.state.steps.count { return }
+                // Cartesia never started: the system voice reads the whole
+                // reply at once and no sentence starts will ever arrive.
+                if didTextToSpeechFailBeforeAnyAudio { session.startedStepIndices.insert(stepIndex) }
+                // A sentence start that never comes must not pin the pipeline.
+                if Date().timeIntervalSince(waitStartDate) > Self.secondsToWaitForAStepSentenceToStart {
+                    session.stopReason = .cancelled
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard let runner = walkthroughRunner else { return }
+            var step = runner.state.steps[stepIndex]
+            let stepSentence = walkthroughSentenceTextByStepIndex[stepIndex] ?? step.label ?? "step \(step.stepNumber)"
+
+            if session.mode == .followUpOnRecentWalkthrough {
+                // Narrate the step hoot gave earlier while its click is prepared.
+                streamingResponseText = stepSentence
+                try? await cartesiaTTSClient.speakText(stepSentence)
+                if isCancelled() { session.stopReason = .cancelled; return }
+            }
+            if isExplainerVideoPlaying { stop(.explainerPanelIsOpen); return }
+            if stepIndex == 0 {
+                // From here on the cursor is hoot's; any drift is the learner's.
+                session.executor.noteCursorAsPlacedByHootNow()
+            }
+            if session.executor.learnerHasMovedTheMouse { stop(.learnerMovedTheMouse); return }
+
+            // The tutor's box for a later step is its best guess at a control
+            // that may only exist after the earlier click, so look again.
+            if stepIndex >= 1 || session.mode == .followUpOnRecentWalkthrough {
+                do {
+                    guard let freshStep = try await HootWalkthroughLocate.locateStep(step, stepSentence: stepSentence, llmClient: llmClient) else {
+                        stop(.controlNotFound(label: step.label))
+                        return
+                    }
+                    if isCancelled() { session.stopReason = .cancelled; return }
+                    runner.replaceStep(atIndex: stepIndex, with: freshStep)
+                    step = freshStep
+                } catch {
+                    NSLog("⚠️ just do it: locate failed: %@", String(describing: error))
+                    stop(.controlNotFound(label: step.label))
+                    return
+                }
+                if session.executor.learnerHasMovedTheMouse { stop(.learnerMovedTheMouse); return }
+            }
+
+            // Frame first, then the cursor, then the click.
+            runner.noteSentenceStarted(forStepIndex: stepIndex)
+            try? await Task.sleep(nanoseconds: UInt64(Self.secondsBetweenFrameLandingAndCursorFlight * 1_000_000_000))
+            if isCancelled() { session.stopReason = .cancelled; return }
+            if let stopReason = await session.executor.moveCursorAndClick(at: step.globalCenter, label: step.label, isCancelled: isCancelled) {
+                stop(stopReason)
+                return
+            }
+            session.clickedStepCount += 1
+            stepIndex += 1
+        }
+    }
+
+    /// After the reply is spoken: wait for the clicks to catch up, then say
+    /// why hoot stopped (if it did) or show the done check. No verdict
+    /// watching: hoot did the steps itself.
+    private func finishJustDoItExecution(session: JustDoItSession, pipelineGeneration: Int) async {
+        if let executionTask = session.executionTask {
+            await executionTask.value
+        }
+        guard isCurrentGeneration(pipelineGeneration) else { return }
+        if let stopReason = session.stopReason {
+            if let spokenSentence = stopReason.spokenSentence {
+                await speakOneSentenceAndWait(spokenSentence, pipelineGeneration: pipelineGeneration)
+            }
+            walkthroughRunner?.end()
+            return
+        }
+        guard session.clickedStepCount > 0 else {
+            walkthroughRunner?.end()
+            return
+        }
+        print("🖱️ just do it: \(session.clickedStepCount) step(s) clicked")
+        // A fresh question's closing line is the tutor's own last sentence,
+        // already spoken; a follow-up had no reply of its own.
+        if session.mode == .followUpOnRecentWalkthrough {
+            await speakOneSentenceAndWait("done.", pipelineGeneration: pipelineGeneration)
+        }
+        walkthroughRunner?.finishAsDoneByHoot()
+        // Long enough for the check to draw before the frame goes out.
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        walkthroughRunner?.end()
+    }
+
+    /// The whole answer for a bare "just do it" after a walkthrough: no
+    /// tutor call; the steps hoot gave a moment ago are re-located on the
+    /// screen as it is now, narrated and clicked one by one.
+    private func runJustDoItFollowUpPipeline(_ recentWalkthrough: RecentWalkthroughForFollowUp, pipelineGeneration: Int) async {
+        // One execution per walkthrough: a second "do it" would re-click.
+        recentWalkthroughForFollowUp = nil
+
+        let runner = HootWalkthroughRunner(totalStepCount: recentWalkthrough.totalStepCount) { [weak self] updatedState in
+            self?.walkthrough = updatedState
+        }
+        runner.appendSteps(recentWalkthrough.steps, totalStepCount: recentWalkthrough.totalStepCount)
+        runner.handledParsedStepCount = recentWalkthrough.steps.count
+        walkthroughRunner = runner
+        walkthroughSentenceTextByStepIndex = recentWalkthrough.sentenceTextByStepIndex
+
+        let session = JustDoItSession(mode: .followUpOnRecentWalkthrough)
+        // Every step was already said; the executor narrates each one itself.
+        session.startedStepIndices = Set(recentWalkthrough.steps.indices)
+        session.hasStreamFinished = true
+        justDoItSession = session
+
+        startStreamingSpokenAnswer(pipelineGeneration: pipelineGeneration)
+        await speakOneSentenceAndWait("on it.", pipelineGeneration: pipelineGeneration)
+        guard isCurrentGeneration(pipelineGeneration) else { return }
+        await executeJustDoItSteps(session: session, pipelineGeneration: pipelineGeneration)
+        await finishJustDoItExecution(session: session, pipelineGeneration: pipelineGeneration)
+
+        guard isCurrentGeneration(pipelineGeneration) else { return }
+        walkthroughRunner?.end()
+        justDoItSession = nil
+        voiceState = .idle
+        isAnswerPipelineRunning = false
+        currentAnswerTask = nil
+        // The hold paused the video like any question; hoot's clicks are over.
+        await youTubeContextProvider.resumeVideoIfWePausedIt()
     }
 
     // MARK: - Napkin sketch
@@ -524,6 +779,19 @@ final class HootController: ObservableObject {
         streamingResponseText = ""
         clearDetectedElementLocation()
 
+        // A bare "just do it" right after a walkthrough executes that
+        // walkthrough instead of asking the tutor (MARK: Just do it). Any
+        // other question forgets it, so a later "do it" can't replay it.
+        if reviewTurnForThisQuestion == nil, followUpQuestionForThisAnswer == nil,
+           let recentWalkthrough = recentWalkthroughToExecute(forQuestion: trimmedQuestionText) {
+            print("🖱️ just do it: executing the walkthrough for \"\(recentWalkthrough.question)\"")
+            currentAnswerTask = Task { [weak self] in
+                await self?.runJustDoItFollowUpPipeline(recentWalkthrough, pipelineGeneration: pipelineGeneration)
+            }
+            return
+        }
+        recentWalkthroughForFollowUp = nil
+
         currentAnswerTask = Task { [weak self] in
             await self?.runAnswerPipeline(
                 questionText: trimmedQuestionText,
@@ -575,6 +843,25 @@ final class HootController: ObservableObject {
                 // An explicit "draw it" / "make a video" is enforced, not left
                 // to the prose rules in the system prompt.
                 userPromptWithVideoContext += "\n\n" + explicitPictureDirective
+            }
+            // "how do i share this doc, just do it": the reply must be a
+            // walkthrough, and hoot clicks its steps (MARK: Just do it).
+            // The explicit phrase is the authorization; without
+            // Accessibility the clicks would be dropped, so hoot points
+            // instead and says why.
+            // Never while the explainer panel is open: then it is an
+            // ordinary walkthrough, pointing only.
+            let questionAsksHootToDoIt = reviewTurn == nil && followUpQuestion == nil
+                && HootTutorPrompt.questionAsksHootToDoItForThem(questionText)
+            let startsJustDoItExecution = questionAsksHootToDoIt && HootWalkthroughExecutor.canPostMouseEvents && !isExplainerVideoPlaying
+            if startsJustDoItExecution {
+                userPromptWithVideoContext += "\n\n" + HootTutorPrompt.doItForMeDirective
+                print("🖱️ just do it asked")
+            } else if questionAsksHootToDoIt, !HootWalkthroughExecutor.canPostMouseEvents {
+                userPromptWithVideoContext += "\n\n" + HootTutorPrompt.doItForMeWithoutAccessibilityDirective
+                print("🖱️ just do it asked, but accessibility is off: pointing only")
+            } else if questionAsksHootToDoIt {
+                print("🖱️ just do it asked while the explainer panel is open: pointing only")
             }
             var youTubeContextForExplainerVideo: StudioYouTubeContext?
             var memoryRecallQueryLines = [questionText]
@@ -657,7 +944,12 @@ final class HootController: ObservableObject {
                     guard let self, self.isCurrentGeneration(pipelineGeneration) else { return }
                     // Walkthrough: step tags come before their sentences, so
                     // resolve them before the sentence is handed to TTS.
-                    self.noteWalkthroughSteps(inStreamingResponse: accumulatedResponseText, capturedScreens: capturedScreens)
+                    self.noteWalkthroughSteps(
+                        inStreamingResponse: accumulatedResponseText,
+                        capturedScreens: capturedScreens,
+                        startsJustDoItExecution: startsJustDoItExecution,
+                        pipelineGeneration: pipelineGeneration
+                    )
                     self.enqueueCompletedSentences(
                         from: accumulatedResponseText,
                         streamingSpeechState: streamingSpeechState
@@ -665,6 +957,8 @@ final class HootController: ObservableObject {
                 }
             )
             guard isCurrentGeneration(pipelineGeneration) else { return }
+            // The step list is final now (MARK: Just do it).
+            justDoItSession?.hasStreamFinished = true
 
             // Pull out the picture request ([SKETCH:...] or [VIDEO:...]) first,
             // then the pointing tag from what is left.
@@ -836,15 +1130,18 @@ final class HootController: ObservableObject {
 
             // Speak whatever is left after the last complete sentence, then
             // let the queue drain.
-            if !didTextToSpeechFailBeforeAnyAudio {
+            // (Not after hoot stopped clicking mid-walkthrough: the rest of the
+            // narration would describe clicks that won't happen.)
+            if !didTextToSpeechFailBeforeAnyAudio, justDoItSession?.stopReason == nil {
                 let unspokenRemainder = String(spokenText.dropFirst(streamingSpeechState.enqueuedCharacterCount))
-                cartesiaTTSClient.enqueueSentence(
-                    unspokenRemainder,
-                    walkthroughStepIndex: walkthroughStepIndex(
-                        forSentenceIn: streamingSpeechState.enqueuedCharacterCount..<max(spokenText.count, streamingSpeechState.enqueuedCharacterCount),
-                        responseText: fullResponseText
-                    )
+                let stepIndexStartedByRemainder = walkthroughStepIndex(
+                    forSentenceIn: streamingSpeechState.enqueuedCharacterCount..<max(spokenText.count, streamingSpeechState.enqueuedCharacterCount),
+                    responseText: fullResponseText
                 )
+                if let stepIndexStartedByRemainder, !unspokenRemainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    walkthroughSentenceTextByStepIndex[stepIndexStartedByRemainder] = unspokenRemainder.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                cartesiaTTSClient.enqueueSentence(unspokenRemainder, walkthroughStepIndex: stepIndexStartedByRemainder)
             }
             cartesiaTTSClient.finishSpokenAnswer()
             if spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -869,7 +1166,11 @@ final class HootController: ObservableObject {
 
             // Walkthrough: the steps are spoken; now watch the learner do them
             // and confirm. The pipeline stays "running" so hoot doesn't leave.
-            if walkthroughRunner != nil {
+            // When hoot is clicking the steps itself there is nothing to
+            // watch for: wait for its clicks instead (MARK: Just do it).
+            if let justDoItSession {
+                await finishJustDoItExecution(session: justDoItSession, pipelineGeneration: pipelineGeneration)
+            } else if walkthroughRunner != nil {
                 await runWalkthroughWatchAndConfirm(
                     question: questionText,
                     capturedScreens: capturedScreens,
@@ -891,6 +1192,8 @@ final class HootController: ObservableObject {
         guard isCurrentGeneration(pipelineGeneration) else { return }
         // Walkthrough: over either way (confirmed, given up, or the answer failed).
         walkthroughRunner?.end()
+        justDoItSession?.executionTask?.cancel()
+        justDoItSession = nil
         voiceState = .idle
         isAnswerPipelineRunning = false
         currentAnswerTask = nil
@@ -1053,9 +1356,16 @@ final class HootController: ObservableObject {
             self.didTextToSpeechFailBeforeAnyAudio = true
         }
         // Walkthrough: sentence k's clip start is what lands step k's frame.
+        // When hoot clicks the steps itself, the clip start only releases
+        // the executor for that step; the frame then follows the click
+        // (MARK: Just do it).
         cartesiaTTSClient.onSentenceStarted = { [weak self] _, walkthroughStepIndex in
             guard let self, pipelineGeneration == self.answerGeneration, let walkthroughStepIndex else { return }
-            self.walkthroughRunner?.noteSentenceStarted(forStepIndex: walkthroughStepIndex)
+            if let justDoItSession = self.justDoItSession {
+                justDoItSession.startedStepIndices.insert(walkthroughStepIndex)
+            } else {
+                self.walkthroughRunner?.noteSentenceStarted(forStepIndex: walkthroughStepIndex)
+            }
         }
         cartesiaTTSClient.beginSpokenAnswer()
     }
@@ -1066,6 +1376,9 @@ final class HootController: ObservableObject {
     /// clips aren't choppy.
     private func enqueueCompletedSentences(from accumulatedResponseText: String, streamingSpeechState: StreamingSpeechState) {
         guard !didTextToSpeechFailBeforeAnyAudio else { return }
+        // Hoot stopped clicking mid-walkthrough: the rest of the narration
+        // would describe clicks that won't happen (MARK: Just do it).
+        if let justDoItSession, justDoItSession.stopReason != nil { return }
         // Same rule as the final text (walkthrough step tags stripped, cut at
         // the first other tag), so the enqueued count stays valid.
         let speakableText = HootResponseTags.speakableText(from: accumulatedResponseText)
@@ -1089,15 +1402,16 @@ final class HootController: ObservableObject {
                 if sentenceLength >= minimumSentenceLength {
                     let sentenceText = String(notYetEnqueuedText.dropFirst(sentenceStartOffset).prefix(sentenceLength))
                     let sentenceStartInSpeakableText = streamingSpeechState.enqueuedCharacterCount
-                    cartesiaTTSClient.enqueueSentence(
-                        sentenceText,
-                        walkthroughStepIndex: isWalkthrough
-                            ? walkthroughStepIndex(
-                                forSentenceIn: sentenceStartInSpeakableText..<(sentenceStartInSpeakableText + sentenceLength),
-                                responseText: accumulatedResponseText
-                            )
-                            : nil
-                    )
+                    let stepIndexStartedByThisSentence = isWalkthrough
+                        ? walkthroughStepIndex(
+                            forSentenceIn: sentenceStartInSpeakableText..<(sentenceStartInSpeakableText + sentenceLength),
+                            responseText: accumulatedResponseText
+                        )
+                        : nil
+                    if let stepIndexStartedByThisSentence {
+                        walkthroughSentenceTextByStepIndex[stepIndexStartedByThisSentence] = sentenceText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    cartesiaTTSClient.enqueueSentence(sentenceText, walkthroughStepIndex: stepIndexStartedByThisSentence)
                     streamingSpeechState.enqueuedCharacterCount += sentenceLength
                     sentenceStartOffset = characterOffset
                 }

@@ -85,6 +85,7 @@ enum HootTutorPrompt {
 
     walkthroughs:
     only when they ask HOW TO DO something on the screen in front of them ("how do i share this doc?", "how do i turn on dark mode here?", "where do i change the font?"), guide them through it instead of describing it: two to five short sentences, one action each, and put a step tag inline right BEFORE each sentence: [STEP n/N POINT:x,y,w,h:label] with the same box rules as pointing (snug box around the control for that step, label one to three words, :screenN if it's on another screen). the box moves from step to step as you speak, then you wait and watch them do it. keep each sentence to the action ("click share.", "then switch this to anyone with the link."). box what is visible now; if a later step's control only appears after an earlier click, box the best current spot for it (the button that opens it). a walkthrough ends with [CONCEPT:none] [POINT:none], never a video, never a prediction or quick check. explanations of what something is or why it works are never walkthroughs.
+    when they explicitly ask you to do it for them ("just do it", "do it for me"), the prompt will say so: then you click each step's box yourself as you say its sentence, so the sentences narrate the clicks ("i'll do it. clicking share.") and every step must be a single click, nothing typed.
 
     rewinding the video:
     when a video transcript is provided and they ask to find a moment in it ("go back to where she explained eigenvectors", "where did he define that?", "play the part about the chain rule again", "skip to when they get to backprop"), the prompt will include the whole transcript with timestamps. find the line where that thing is first actually explained (where the idea starts, not a later passing mention, and not the line where the word first appears in a preview), say in one short sentence where it is and what they'll hear ("she sets that up at six fifty-two, right after the area example. taking you there."), say the time the way a person would, then end with [SEEK:mm:ss] copying that line's stamp (use h:mm:ss if the stamp has hours). the video jumps there and plays when you finish talking, so don't re-explain the idea yourself: that's what the rewind is for. one sentence or two at most, no picture, no quick check, [CONCEPT:none], [POINT:none]. if nothing in the transcript matches, say so in one line and use [SEEK:none]. never use [SEEK:] when they didn't ask to go somewhere in the video.
@@ -106,6 +107,7 @@ enum HootTutorPrompt {
     - asks what an api is: "an api is a menu a program offers to other programs. you don't need to know how the kitchen works, you order off the menu and get your food back. [CONCEPT:apis] [POINT:none]"
     - lecture paused right before the speaker shows what a zero determinant does, asks "so what happens when it's zero?": "before i tell you, take a guess. the determinant is how much area gets stretched, so if it's zero, what happens to this square? [PREDICT] [CONCEPT:none] [POINT:470,250,340,260:the grid]"
     - in a google doc, asks "how do i share this with my study group?": "[STEP 1/3 POINT:1180,62,74,30:share] click share. [STEP 2/3 POINT:520,330,300,36:access] then switch this to anyone with the link. [STEP 3/3 POINT:470,420,110,32:copy link] then copy link and send it to them. [CONCEPT:none] [POINT:none]"
+    - in a google doc, asks "how do i share this doc? just do it": "[STEP 1/3 POINT:1180,62,74,30:share] i'll do it. clicking share. [STEP 2/3 POINT:520,330,300,36:access] now switching this to anyone with the link. [STEP 3/3 POINT:470,420,110,32:copy link] and copying the link, it's on your clipboard. [CONCEPT:none] [POINT:none]"
     - watching a linear algebra lecture at 14:10, asks "can you go back to where she explained what a determinant is?": "she builds it up at six fifty-two, starting from how much the unit square stretches. taking you there. [SEEK:06:52] [CONCEPT:none] [POINT:none]"
     - asks "what's the learning rate? quiz me after": "that's the learning rate, how big a step the model takes each update. small steps are slow but steady, big ones overshoot. quick one: if the loss keeps bouncing around instead of settling, is the learning rate too big or too small? [CHECK:if the loss keeps bouncing around instead of settling, is the learning rate too big or too small?] [CONCEPT:learning rate] [POINT:488,208,52,26:learning rate]"
     """
@@ -161,6 +163,56 @@ enum HootTutorPrompt {
             return "(they asked for a picture out loud: you must include exactly one picture this time, a [NAPKIN:...] block unless motion is the point.)"
         }
         return nil
+    }
+
+    // MARK: Just do it (hoot clicks the steps itself)
+
+    /// The phrases that authorize hoot to click on the learner's screen.
+    /// Kept to explicit asks: the phrase is the permission, so nothing
+    /// looser ("can you help me with this") ever counts. Matched on the
+    /// lowercased question with its punctuation removed, so dictation like
+    /// "just, do it" and "do it for me." still match.
+    private static let doItForMePhrases = [
+        "just do it", "do it for me", "do this for me", "do that for me", "can you do it", "could you do it",
+        "you do it", "you can do it", "click it for me", "click for me", "click them for me", "click that for me",
+        "go ahead and do it", "go ahead and click", "make it happen", "do it yourself", "you click it",
+        "do the clicks", "do it for me please",
+    ]
+
+    /// True when the learner explicitly asked hoot to do it for them ("how
+    /// do i share this, just do it", "can you do it for me?"). The explicit
+    /// phrase is the authorization to click; nothing else is.
+    static func questionAsksHootToDoItForThem(_ questionText: String) -> Bool {
+        let normalizedQuestion = normalizedWords(in: questionText).joined(separator: " ")
+        return doItForMePhrases.contains { normalizedQuestion.contains($0) }
+    }
+
+    /// True for a hold that is only the ask ("just do it", "ok, you do it")
+    /// with no new question in it: that executes the walkthrough hoot gave
+    /// a moment ago instead of asking the tutor again. Anything longer
+    /// ("how do i share this doc, just do it") is a fresh question.
+    static func isBareDoItRequest(_ questionText: String) -> Bool {
+        guard questionAsksHootToDoItForThem(questionText) else { return false }
+        return normalizedWords(in: questionText).count <= 7
+    }
+
+    /// Appended to the user prompt for a fresh "how do i X, just do it"
+    /// question: the reply must be a walkthrough hoot can click through.
+    static let doItForMeDirective = """
+    (they asked you to do it for them, out loud. if this is something to do on the screen in front of them, reply as a walkthrough: two to five short sentences, one click each, each with its [STEP n/N POINT:x,y,w,h:label] tag right before it, snug boxes as usual. you will click each box yourself as you say its sentence, so plan clicks only: no typing, no dragging, no keyboard shortcuts; if a step needs typing, stop the walkthrough before it and say they'll need to type that part. say you'll do it and narrate each click as it happens ("i'll do it. clicking share." then "now switching this to anyone with the link."). end with [CONCEPT:none] [POINT:none] as always. if it isn't something to do on this screen, answer the question normally with no step tags.)
+    """
+
+    /// The honest version when Accessibility is off: hoot can't post clicks,
+    /// so it guides as usual and says why it isn't doing it.
+    static let doItForMeWithoutAccessibilityDirective = """
+    (they asked you to do it for them, but you can't click for them right now: accessibility permission is off for hoot. give the walkthrough as usual with step tags, and say in your first sentence, in a few words, that you can't click yet until accessibility is turned on in your menu bar panel, so you'll point instead.)
+    """
+
+    /// Lowercased words with the punctuation stripped, for phrase matching.
+    private static func normalizedWords(in questionText: String) -> [String] {
+        questionText.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "'")).inverted)
+            .filter { !$0.isEmpty }
     }
 
     /// Whether the question might ask to find a moment in the video they're

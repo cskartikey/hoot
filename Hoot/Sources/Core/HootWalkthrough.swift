@@ -261,6 +261,75 @@ enum HootWalkthroughConfirmation {
     }
 }
 
+// MARK: - Locate call ("just do it")
+
+/// When hoot clicks the steps itself, a control for step two onward may
+/// only exist after the earlier click (the tutor boxed "the best current
+/// spot" for it). Before clicking, hoot takes a fresh screenshot and asks
+/// one short question: where is that control now?
+enum HootWalkthroughLocate {
+    /// Small, so the locate call is quick: one tag and nothing else.
+    static let maximumOutputTokens = 60
+    static let secondsToWaitForAnswer: TimeInterval = 15
+
+    static let systemPrompt = """
+    you find one control on a screenshot for a tiny study buddy that is about to click it. you get the screenshot, the spoken step it belongs to and a short label for the control.
+    reply with exactly one tag and nothing else: [POINT:x,y,w,h:label] where x,y is the top-left corner of a snug box around the whole control and w,h its width and height, in the screenshot's pixel space (origin top-left, x right, y down; the image is labeled with its pixel size). if the control is not visible on this screenshot, reply [POINT:none]. never guess a box for something you can't see.
+    """
+
+    /// The user turn: the fresh screenshot of the step's display, then the
+    /// step's sentence and label.
+    static func userContentBlocks(stepSentence: String, label: String?, screen: CapturedScreen) -> [[String: Any]] {
+        [
+            [
+                "type": "image",
+                "source": [
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": screen.jpegImageData.base64EncodedString(),
+                ],
+            ],
+            ["type": "text", "text": "the screen now (\(screen.imageWidthInPixels)x\(screen.imageHeightInPixels) pixels)."],
+            ["type": "text", "text": "the step: \"\(stepSentence)\"\nthe control: \(label ?? "(no label)")\nwhere is it now?"],
+        ]
+    }
+
+    /// Asks where `step`'s control is on a fresh screenshot of its display.
+    /// nil when the model answered [POINT:none] (or nothing usable), in
+    /// which case the executor stops rather than click a stale box.
+    static func locateStep(
+        _ step: HootWalkthroughStep,
+        stepSentence: String,
+        llmClient: LLMClient
+    ) async throws -> HootWalkthroughStep? {
+        let freshScreens = try await ScreenCapturer.captureAllScreens()
+        guard let freshScreen = freshScreens.first(where: { $0.displayFrame == step.displayFrame })
+            ?? freshScreens.first(where: { $0.isCursorScreen })
+            ?? freshScreens.first else { return nil }
+
+        let responseText = try await llmClient.requestCompleteAnswer(
+            systemPrompt: systemPrompt,
+            userContentBlocks: userContentBlocks(stepSentence: stepSentence, label: step.label, screen: freshScreen),
+            maximumOutputTokens: maximumOutputTokens,
+            secondsToWaitForWholeAnswer: secondsToWaitForAnswer
+        )
+        print("🔎 locate step \(step.stepNumber) (\(step.label ?? "no label")): \(responseText.trimmingCharacters(in: .whitespacesAndNewlines))")
+        // Only the one screen was sent, so a screen number in the reply
+        // would be meaningless: resolve against that screen alone.
+        guard let pointingTarget = HootResponseTags.parsePointingTarget(from: responseText),
+              let resolvedLocation = HootResponseTags.resolvePointingTarget(pointingTarget, capturedScreens: [freshScreen]) else {
+            return nil
+        }
+        return HootWalkthroughStep(
+            stepNumber: step.stepNumber,
+            label: pointingTarget.label ?? step.label,
+            globalCenter: resolvedLocation.globalLocation,
+            globalBoxSize: resolvedLocation.globalBoxSize,
+            displayFrame: resolvedLocation.displayFrame
+        )
+    }
+}
+
 // MARK: - Runner
 
 /// Owns one walkthrough from the first parsed step to the end. The
@@ -315,13 +384,31 @@ final class HootWalkthroughRunner {
     var hasSteps: Bool { !state.steps.isEmpty }
 
     /// TTS started the sentence that carries step `stepIndex`: the frame
-    /// moves on the sentence boundary, never on a click.
+    /// moves on the sentence boundary, never on a click. (When hoot clicks
+    /// the steps itself, the executor calls this instead, right before each
+    /// click, so the frame slides to the box that is about to be clicked.)
     func noteSentenceStarted(forStepIndex stepIndex: Int) {
         guard state.steps.indices.contains(stepIndex) else { return }
         var updatedState = state
         updatedState.currentStepIndex = stepIndex
         updatedState.phase = .step(stepIndex)
         state = updatedState
+    }
+
+    /// "Just do it": a fresh look found the step's control somewhere else
+    /// than the tutor's (possibly stale) box; the frame follows the new one.
+    func replaceStep(atIndex stepIndex: Int, with freshStep: HootWalkthroughStep) {
+        guard state.steps.indices.contains(stepIndex) else { return }
+        var updatedState = state
+        updatedState.steps[stepIndex] = freshStep
+        state = updatedState
+    }
+
+    /// "Just do it": hoot clicked every step itself, so there is nothing to
+    /// watch for; the frame turns `accent2` with the check, then goes out.
+    func finishAsDoneByHoot() {
+        guard state.phase != .ended else { return }
+        setPhase(.done)
     }
 
     /// Ends the walkthrough wherever it is (a new question, an error).

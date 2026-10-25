@@ -152,3 +152,23 @@ struct PointingTabContent { var badge: String?; var label: String?; var dots: In
 ## Open question
 
 Step 2's target (the access menu) only exists after step 1 is clicked. This spec advances on speech as asked; if the target isn't on screen when its sentence starts, the tutor's box will be stale. Options: hold the frame at step N in a short waiting state until the screen changes, or have the tutor re-point after a fresh screenshot. Not designed here.
+
+## Just do it
+
+hoot can perform the walkthrough's clicks itself, but only when the learner explicitly asks for it: "just do it", "do it for me", "can you do it", "you do it", "do that for me", "click it for me", "go ahead and do it", "make it happen" (`HootTutorPrompt.questionAsksHootToDoItForThem`; matched on the lowercased, de-punctuated question). The phrase is the authorization; nothing else ever makes hoot act on the screen.
+
+**Two ways in**
+- Fresh question ("how do i share this doc, just do it"): the user prompt gets `HootTutorPrompt.doItForMeDirective`, so the tutor still answers in walkthrough form (STEP tags, one click per sentence, 2–5 steps) but in the doing register ("i'll do it. clicking share."). If Accessibility is off, `doItForMeWithoutAccessibilityDirective` is sent instead: the tutor points as usual and says it can't click yet.
+- Follow-up (a bare "just do it" / "you do it", ≤ 7 words, within 120 s of a spoken walkthrough): no tutor call. `HootController.recentWalkthroughForFollowUp` (snapshotted when the normal walkthrough enters its watch phase) is replayed: hoot says "on it.", then narrates each step's original sentence while it re-locates and clicks it, then "done.". Any other question drops the snapshot.
+
+**Execution** (`HootWalkthroughExecutor` + `HootController.executeJustDoItSteps`)
+1. A step is never clicked before TTS has started its sentence (`onSentenceStarted` only releases the executor in this mode; the frame no longer follows the voice).
+2. Step 1 of a fresh question uses the tutor's box as is (the screenshot is seconds old). From step 2 on (and for every step of a follow-up) a fresh screenshot of the step's display goes into one short locate call (`HootWalkthroughLocate`, 60 tokens, 15 s): `[POINT:x,y,w,h:label]` for where the control is now, or `[POINT:none]`. The runner's step is replaced with the fresh box (`replaceStep`), so the frame slides to what is actually clicked.
+3. Order on screen: the frame slides to the step (`noteSentenceStarted`), 300 ms, the real cursor flies there in 10 eased hops over 250 ms (CGEvent mouse-moved), one left click (CGEvent down + up, click count 1), then 700 ms for the UI to settle. Each click is logged with a 🖱️ prefix and the label.
+4. Clicks only: no typing, drags, shortcuts or right-clicks. Max 5 steps.
+
+**Stops** (`HootWalkthroughExecutionStop`, each with one spoken sentence): the learner moves the mouse more than 12 pt from where hoot last put it (checked between hops and before every step); a locate call answers none (or fails); a target off every screen; the explainer panel is open; Accessibility not granted; a new ⌃⌥ hold (answer generation changed; nothing is said, the hold already cut in). On a stop the rest of the narration is cut (`stopPlayback`, and no more sentences are enqueued), the stop sentence is spoken, and the walkthrough ends.
+
+**Ending**: after the last click (and the voice) the frame does the normal done cut (`finishAsDoneByHoot` → `.done`, accent2 + check), holds about a second and goes out via `end()`. No verdict watching: hoot did the steps itself. The tutor's own last sentence is the closing line for a fresh question.
+
+**Not built**: a settings toggle, undo, typing. The mouse-move check can't tell a trackpad brush from a grab, so a brush during execution stops it (safe default).

@@ -239,10 +239,18 @@ final class LLMClient {
     // MARK: - Walkthrough
 
     /// One non-streaming call with caller-built content blocks (the
-    /// walkthrough's before/after screenshots). Same body shape as the
-    /// tutor call; the worker answers `{content:[{type:"text",text}]}` for
-    /// both brains when `stream` is false.
-    func requestCompleteAnswer(systemPrompt: String, userContentBlocks: [[String: Any]]) async throws -> String {
+    /// walkthrough's before/after screenshots, the "just do it" locate
+    /// call). Same body shape as the tutor call; the worker answers
+    /// `{content:[{type:"text",text}]}` for both brains when `stream` is
+    /// false. The defaults suit the verdict; the locate call passes a
+    /// smaller budget and a shorter wait because it answers with one tag
+    /// while the cursor hovers.
+    func requestCompleteAnswer(
+        systemPrompt: String,
+        userContentBlocks: [[String: Any]],
+        maximumOutputTokens requestedMaximumOutputTokens: Int = 300,
+        secondsToWaitForWholeAnswer: TimeInterval = 40
+    ) async throws -> String {
         let chatURLString = "\(workerBaseURL)/chat"
         guard let chatURL = URL(string: chatURLString) else {
             throw LLMClientError.invalidWorkerURL(chatURLString)
@@ -251,10 +259,10 @@ final class LLMClient {
         chatRequest.httpMethod = "POST"
         chatRequest.setValue("application/json", forHTTPHeaderField: "content-type")
         chatRequest.setValue("application/json", forHTTPHeaderField: "accept")
-        chatRequest.timeoutInterval = 40
+        chatRequest.timeoutInterval = secondsToWaitForWholeAnswer
         chatRequest.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
-            "max_tokens": 300,
+            "max_tokens": requestedMaximumOutputTokens,
             "stream": false,
             "system": systemPrompt,
             "messages": [["role": "user", "content": userContentBlocks]],
