@@ -4,37 +4,40 @@ I watch a lot of technical lectures on YouTube and read technical books and blog
 
 What usually works is having someone explain it, or point out the one piece I missed. So I built that someone, that friend who does exactly that!
 
-![hoot](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/01-hoot.png)
+![hoot](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/01-hoot.jpg)
 
 ## What it does
 
-hoot is a tiny pixel owl that sleeps in the corner of your Mac. When you hit something that doesn't make sense, you hold ⌃⌥ and just say it. "Wait, why does a zero determinant squish everything?" It hears you, looks at your screen, pulls the YouTube transcript if a lecture is playing, pauses the video, and explains it out loud. Like a friend would.
+hoot is a tiny pixel owl that sleeps in the corner of your Mac. When you hit something that doesn't make sense, you hold ⌃⌥ and just say it. It hears you, looks at your screen, gets the transcript, and explains it out loud.
 
-![hoot answering at the cursor with a frame on the unit square](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/02-wait-what-it-answers.jpg)
+![hoot answering at the cursor with a frame on the unit square](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/02-wait-what-it-answers.jpg)
 
-And then it does the things a friend does that a chatbot can't:
+It can also do a lot of fancy stuff! 
 
-- **It points.** A little index card frame lands on the exact term, line of code, or button you asked about. If you ask "which one is the learning rate", it rings the η and draws an arrow to the thing it multiplies.
+- **It can annotate!** A little index card frame lands on the exact term, line of code, or button you asked about. If you ask "which one is the learning rate", it rings the η and draws an arrow to the thing it multiplies.
 
-![hoot rings the learning rate and draws an arrow to the gradient](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/03-it-points.jpg)
-- **It draws on your notes.** A small napkin sketch shows up next to whatever you're reading, drawn stroke by stroke while it talks, so each part appears when it's mentioned.
+![hoot rings the learning rate and draws an arrow to the gradient](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/03-it-points.jpg)
 
-![a napkin sketch drawn beside the hash table diagram](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/05-it-draws-on-your-notes.jpg)
+- **It draws on your notes.** A small napkin sketch shows up next to whatever you're reading, drawn stroke by stroke (realtime) while it talks, so each part appears when it's mentioned.
+
+![a napkin sketch drawn beside the hash table diagram](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/05-it-draws-on-your-notes.jpg)
+
 - **It rewinds for you.** "Go back to where he explained what a determinant is." It finds the moment in the transcript, tells you the time, and jumps the video there.
-- **It makes you a picture.** A quick animated sketch if the idea is about motion, or a 30 second narrated Manim video with real typeset math if it's an equation being built up.
+- **It can visualize and make videos for you! (using svg and manim)** A quick animated sketch if the idea is about motion, or a 30 second narrated Manim video with real typeset math if it's an equation being built up.
 
-![a frame from the explainer video hoot made for the update rule](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/06-it-makes-you-a-video.jpg)
+![a frame from the explainer video hoot made for the update rule](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/06-it-makes-you-a-video.jpg)
+
 - **It walks you through stuff.** "How do I share this doc?" gets you steps, with the frame sliding from button to button. And if you say "just do it", it takes the mouse. The cursor flies to each step and clicks, finds the next button on a fresh screenshot, and stops the second you touch the trackpad.
 
-![hoot clicking through the share dialog by itself](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/07-just-do-it.jpg)
+![hoot clicking through the share dialog by itself](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/07-just-do-it.jpg)
+
 - **It doesn't let you off easy.** Ask what happens next in a lecture and it makes you guess first. Say "quiz me" and it asks one applied question after the answer, then grades you on your next hold.
 
-![before i tell you, what's your guess](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/09-it-makes-you-guess-first.jpg)
+![before i tell you, what's your guess](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/09-it-makes-you-guess-first.jpg)
+
 - **It remembers.** Every answer gets filed under a concept. When you ask something related later, it says "this is the determinant thing from Tuesday, just in 3D." Concepts come due on a spaced review ladder, and the owl waves from the corner, asks you the question, listens, and grades you.
 
-![a concept with its review ladder in the remembers window](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/10-it-remembers.jpg)
-
-Three mascots, light and dark mode, and you can pick the brain (Claude or OpenAI) and the voice (Cartesia or ElevenLabs) in settings.
+![a concept with its review ladder in the remembers window](https://raw.githubusercontent.com/cskartikey/hoot/main/design/gallery/small/10-it-remembers.jpg)
 
 ## How I built it
 
