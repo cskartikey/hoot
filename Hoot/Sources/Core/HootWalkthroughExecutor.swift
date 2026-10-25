@@ -140,6 +140,7 @@ final class HootWalkthroughExecutor {
         postLeftClick(at: globalPoint)
         lastPlacedCursorLocation = globalPoint
         print("🖱️ clicked \(label ?? "(no label)") at (\(Int(globalPoint.x)), \(Int(globalPoint.y)))")
+        HootDemoLog.recordEvent("click", label ?? "")
 
         try? await Task.sleep(nanoseconds: UInt64(Self.secondsToLetTheInterfaceSettle * 1_000_000_000))
         if isCancelled() { return .cancelled }

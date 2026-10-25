@@ -763,6 +763,7 @@ final class HootController: ObservableObject {
     private func answerQuestion(_ questionText: String) {
         let trimmedQuestionText = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuestionText.isEmpty else { return }
+        HootDemoLog.recordQuestion(trimmedQuestionText)
 
         cancelCurrentAnswerAndSpeech()
         let pipelineGeneration = answerGeneration
@@ -994,6 +995,7 @@ final class HootController: ObservableObject {
                 if questionAsksToFindAMomentInTheVideo || isInsideShownTranscriptWindow {
                     seekTargetSecondsAfterSpeaking = seekTargetSeconds
                     print("⏪ Seek requested: \(YouTubeContextProvider.formatTimestampForTranscript(seekTargetSeconds))")
+                    HootDemoLog.recordEvent("seek", YouTubeContextProvider.formatTimestampForTranscript(seekTargetSeconds))
                 } else {
                     print("⏪ Seek tag ignored (question didn't ask to find a moment and the stamp is outside the shown window): \(YouTubeContextProvider.formatTimestampForTranscript(seekTargetSeconds))")
                 }

@@ -187,6 +187,8 @@ final class CartesiaTTSClient {
         let player = try AVAudioPlayer(data: audioData)
         audioPlayer = player
         player.play()
+        // For the demo cut: exact caption timing and a clean copy of the voice.
+        HootDemoLog.recordSpeech(sentenceText: sentenceText, audioData: audioData, durationSeconds: player.duration)
 
         if !hasStartedPlayingCurrentAnswer {
             hasStartedPlayingCurrentAnswer = true
