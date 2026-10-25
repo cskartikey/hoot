@@ -182,7 +182,84 @@ final class ExplainerSketchClient {
         for forbiddenFragment in forbiddenFragments where lowercasedFinalPageText.contains(forbiddenFragment) {
             return .failure("contains \(forbiddenFragment)")
         }
+        // A drawing that uses a corner of the canvas shows up as a postage
+        // stamp in the card (seen live: five shapes inside 50×110 of 640×360).
+        // The model is told to fill the frame; this makes it a retry.
+        if let drawnExtent = drawnExtent(ofSVGIn: pageText),
+           drawnExtent.width < sketchCanvasWidth * 0.5 || drawnExtent.height < sketchCanvasHeight * 0.4 {
+            return .failure("the drawing covered only \(Int(drawnExtent.width))×\(Int(drawnExtent.height)) of the 640×360 canvas; shapes must be big and spread out so the picture fills it")
+        }
         return .success(pageText)
+    }
+
+    static let sketchCanvasWidth: CGFloat = 640
+    static let sketchCanvasHeight: CGFloat = 360
+
+    /// The rough bounding box of what the SVG draws, from the numeric
+    /// coordinate attributes of its shapes (rects, circles, lines, polygons,
+    /// paths and text). Transforms and animated end states are ignored, so
+    /// it is only good enough to tell a full-frame drawing from a tiny one.
+    /// Nil when nothing measurable was found.
+    static func drawnExtent(ofSVGIn pageText: String) -> CGRect? {
+        guard let svgStart = pageText.range(of: "<svg", options: .caseInsensitive)?.lowerBound,
+              let svgBodyStart = pageText[svgStart...].firstIndex(of: ">") else { return nil }
+        let svgBody = String(pageText[pageText.index(after: svgBodyStart)...])
+        var minX = CGFloat.greatestFiniteMagnitude, minY = CGFloat.greatestFiniteMagnitude
+        var maxX = -CGFloat.greatestFiniteMagnitude, maxY = -CGFloat.greatestFiniteMagnitude
+        func include(x: CGFloat, y: CGFloat) {
+            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+        }
+        func attribute(_ name: String, in tag: String) -> CGFloat? {
+            guard let regex = try? NSRegularExpression(pattern: #"(?:^|\s)"# + name + #"\s*=\s*"\s*(-?[\d.]+)"#),
+                  let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+                  let valueRange = Range(match.range(at: 1), in: tag) else { return nil }
+            return CGFloat(Double(tag[valueRange]) ?? 0)
+        }
+        func numbers(inAttribute name: String, of tag: String) -> [CGFloat] {
+            guard let regex = try? NSRegularExpression(pattern: #"(?:^|\s)"# + name + #"\s*=\s*"([^"]*)""#),
+                  let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+                  let valueRange = Range(match.range(at: 1), in: tag),
+                  let numberRegex = try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#) else { return [] }
+            let value = String(tag[valueRange])
+            return numberRegex.matches(in: value, range: NSRange(value.startIndex..., in: value))
+                .compactMap { Range($0.range, in: value) }
+                .compactMap { Double(value[$0]) }
+                .map { CGFloat($0) }
+        }
+        guard let tagRegex = try? NSRegularExpression(pattern: #"<(rect|circle|ellipse|line|polyline|polygon|path|text)\b[^>]*>"#, options: .caseInsensitive) else { return nil }
+        for tagMatch in tagRegex.matches(in: svgBody, range: NSRange(svgBody.startIndex..., in: svgBody)) {
+            guard let tagRange = Range(tagMatch.range, in: svgBody), let nameRange = Range(tagMatch.range(at: 1), in: svgBody) else { continue }
+            let tag = String(svgBody[tagRange])
+            switch svgBody[nameRange].lowercased() {
+            case "rect":
+                let x = attribute("x", in: tag) ?? 0, y = attribute("y", in: tag) ?? 0
+                let width = attribute("width", in: tag) ?? 0, height = attribute("height", in: tag) ?? 0
+                // A canvas-sized rect is a background, not a drawing.
+                if width >= sketchCanvasWidth * 0.95 && height >= sketchCanvasHeight * 0.95 { continue }
+                include(x: x, y: y); include(x: x + width, y: y + height)
+            case "circle", "ellipse":
+                let cx = attribute("cx", in: tag) ?? 0, cy = attribute("cy", in: tag) ?? 0
+                let rx = attribute("r", in: tag) ?? attribute("rx", in: tag) ?? 0
+                let ry = attribute("r", in: tag) ?? attribute("ry", in: tag) ?? rx
+                include(x: cx - rx, y: cy - ry); include(x: cx + rx, y: cy + ry)
+            case "line":
+                include(x: attribute("x1", in: tag) ?? 0, y: attribute("y1", in: tag) ?? 0)
+                include(x: attribute("x2", in: tag) ?? 0, y: attribute("y2", in: tag) ?? 0)
+            case "polyline", "polygon":
+                let points = numbers(inAttribute: "points", of: tag)
+                for pairStart in stride(from: 0, to: points.count - 1, by: 2) { include(x: points[pairStart], y: points[pairStart + 1]) }
+            case "path":
+                // Good enough for the simple absolute paths these sketches use.
+                let points = numbers(inAttribute: "d", of: tag)
+                for pairStart in stride(from: 0, to: points.count - 1, by: 2) { include(x: points[pairStart], y: points[pairStart + 1]) }
+            case "text":
+                include(x: attribute("x", in: tag) ?? 0, y: attribute("y", in: tag) ?? 0)
+            default:
+                continue
+            }
+        }
+        guard minX <= maxX, minY <= maxY else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     // MARK: - Prompts
@@ -206,7 +283,7 @@ final class ExplainerSketchClient {
 
         the picture:
         - one idea, one motion. read the brief and the tutor's spoken words, then draw the simplest thing that makes the idea click: two to five shapes and one thing changing. think of a chalkboard sketch, not a diagram.
-        - leave the story readable at 318 by 180 points: big shapes, generous spacing, nothing near the edges (keep a 24 unit margin inside the viewbox).
+        - fill the canvas. the card is small (318 by 180 points), so the drawing must use the whole 640 by 360 viewbox: the shapes together span at least 480 wide and 260 tall, the main shape alone is at least 160 units across, labels are font-size 20, and nothing sits closer than 24 units to an edge. a sketch that huddles in the middle shows up as a postage stamp and is rejected.
         - a before state, a change, and an after state that lingers. a ghost (dashed, low opacity) of the "before" left behind helps show what changed.
         """
     }
@@ -226,7 +303,7 @@ final class ExplainerSketchClient {
         """
 
 
-        your previous reply was rejected (\(previousFailureReason)). this time: start with <!doctype html> and end with </html>, put exactly one <svg viewBox="0 0 640 360"> in the body, animate with @keyframes in a <style> block, and include no <script>, no links, no urls, no code fences and no words outside the document.
+        your previous reply was rejected (\(previousFailureReason)). this time: start with <!doctype html> and end with </html>, put exactly one <svg viewBox="0 0 640 360"> in the body, make the drawing span at least 480 by 260 of it with big shapes, animate with @keyframes in a <style> block, and include no <script>, no links, no urls, no code fences and no words outside the document.
         """
     }
 }
