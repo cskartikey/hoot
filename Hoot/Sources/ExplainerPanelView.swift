@@ -92,17 +92,16 @@ struct ExplainerPanelView: View {
         .padding(12)
         .frame(width: ExplainerPanelManager.explainerCardWidth, alignment: .leading)
         .waitWhatGlassPanel(theme: theme, cornerRadius: 16)
-        // Close button appears on hover, top-right over the placeholder /
-        // video, so the resting card matches the design while mouse users
-        // still have a way to dismiss it besides Esc.
+        // Close button is always there, top-right, and brightens on hover.
+        // It used to appear only on hover, but the AVPlayerView and the
+        // sketch's web view swallow the card's hover tracking, so while a
+        // video played the card had no visible way to close besides Esc.
         .overlay(alignment: .topTrailing) {
-            if isHoveringCard {
-                ExplainerCloseButton(theme: theme) {
-                    explainerPanelManager.close()
-                }
-                .padding(18)
-                .transition(.opacity)
+            ExplainerCloseButton(theme: theme) {
+                explainerPanelManager.close()
             }
+            .padding(18)
+            .opacity(isHoveringCard ? 1 : 0.8)
         }
         .onHover { isHoveringNow in
             withAnimation(.easeOut(duration: 0.15)) { isHoveringCard = isHoveringNow }

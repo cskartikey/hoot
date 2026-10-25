@@ -3,7 +3,7 @@
 //  Hoot
 //
 //  Draws the tutor's napkin sketch (HootNapkinSketch.swift) on the screen
-//  overlay: a faint paper card with 2pt accent pixel strokes that look
+//  overlay: a solid paper card with 2pt accent pixel strokes that look
 //  hand-drawn (a little jitter, overshot line ends, rects as four imperfect
 //  strokes, ellipses that don't quite close) and are revealed at pen speed,
 //  one stroke after another, as if hoot were sketching while it talks.
@@ -195,16 +195,19 @@ struct PetNapkinSketchLayerView: View {
 
     // MARK: - Drawing
 
-    /// The paper: a faint card with 2pt notched corners (like the frame's
-    /// tab) and a fainter edge, so the sketch reads as its own little
-    /// surface over whatever is behind it.
+    /// The paper: a solid card in the theme's page colour with 2pt notched
+    /// corners (like the frame's tab) and a visible edge. It is nearly
+    /// opaque on purpose: the accent strokes and ink text are tuned
+    /// against the theme's own background, and a see-through paper put
+    /// them on whatever page was behind (dark ink over a dark terminal,
+    /// light strokes over a white doc) with no contrast at all.
     private func drawPaper(for sketch: HootNapkinSketchState, in graphicsContext: inout GraphicsContext) {
         let paperRect = localRect(fromGlobalRect: sketch.paperRectInGlobalSpace)
         let notch = Self.pixelSize
         var paperPath = Path()
         paperPath.addRect(CGRect(x: paperRect.minX + notch, y: paperRect.minY, width: paperRect.width - notch * 2, height: paperRect.height))
         paperPath.addRect(CGRect(x: paperRect.minX, y: paperRect.minY + notch, width: paperRect.width, height: paperRect.height - notch * 2))
-        graphicsContext.fill(paperPath, with: .color(theme.foreground(opacity: theme.isDark ? 0.06 : 0.04)))
+        graphicsContext.fill(paperPath, with: .color(theme.pageBackground.opacity(0.96)))
 
         // The edge: the same notched outline, 2pt thick, as a pixel path.
         var edgePath = Path()
@@ -212,7 +215,7 @@ struct PetNapkinSketchLayerView: View {
         edgePath.addRect(CGRect(x: paperRect.minX + notch, y: paperRect.maxY - notch, width: paperRect.width - notch * 2, height: notch))
         edgePath.addRect(CGRect(x: paperRect.minX, y: paperRect.minY + notch, width: notch, height: paperRect.height - notch * 2))
         edgePath.addRect(CGRect(x: paperRect.maxX - notch, y: paperRect.minY + notch, width: notch, height: paperRect.height - notch * 2))
-        graphicsContext.fill(edgePath, with: .color(theme.foreground(opacity: theme.isDark ? 0.14 : 0.10)))
+        graphicsContext.fill(edgePath, with: .color(theme.foreground(opacity: theme.isDark ? 0.30 : 0.22)))
     }
 
     private func draw(_ stroke: RasterizedNapkinStroke, visibleCellCount: Int, in graphicsContext: inout GraphicsContext) {
