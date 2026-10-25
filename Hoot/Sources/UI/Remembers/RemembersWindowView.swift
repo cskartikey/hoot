@@ -62,7 +62,7 @@ struct RemembersWindowView: View {
                 model.goBackToList()
             }
         }
-        .onChange(of: hootController.isExplainerVideoPlaying) { _, isPlaying in
+        .onChange(of: hootController.isExplainerPanelOpen) { _, isPlaying in
             if !isPlaying { model.clearReplayingEntry() }
         }
     }

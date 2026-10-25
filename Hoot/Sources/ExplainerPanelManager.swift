@@ -85,6 +85,12 @@ final class ExplainerPanelManager: ObservableObject {
     // MARK: - Published state for ExplainerPanelView
 
     @Published private(set) var explainerPanelPhase: ExplainerPanelPhase = .generatingVideo
+    /// Whether the panel is on screen at all, in any phase (rendering, playing,
+    /// sketch, failed). The phase alone can't say: it is `.generatingVideo`
+    /// even while the panel is hidden. The overlay pet, the nudges and
+    /// "just do it" all key off this, because the panel occupies the
+    /// bottom-right corner and shows its own perched pet in every phase.
+    @Published private(set) var isExplainerPanelOpen: Bool = false
     @Published private(set) var currentQuestionText: String = ""
     /// Title from the studio's `script` event; nil until the script is written.
     @Published private(set) var studioScriptTitleText: String?
@@ -314,6 +320,7 @@ final class ExplainerPanelManager: ObservableObject {
         largeExplainerVideoWindow?.orderOut(nil)
         removeEscapeKeyMonitors()
         explainerPanel?.orderOut(nil)
+        isExplainerPanelOpen = false
     }
 
     /// "try again" from the error state: rerun the same request.
@@ -788,6 +795,7 @@ final class ExplainerPanelManager: ObservableObject {
         // orderFrontRegardless (not makeKeyAndOrderFront) so the panel appears
         // without taking keyboard focus away from the user's app.
         explainerPanel.orderFrontRegardless()
+        isExplainerPanelOpen = true
     }
 
     private func createExplainerPanel() {

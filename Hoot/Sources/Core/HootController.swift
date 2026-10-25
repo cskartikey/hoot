@@ -104,7 +104,10 @@ final class HootController: ObservableObject {
     /// saved explainer video, so the app can offer it again.
     var onReviewForgotWithSavedVideo: ((MemoryEntry) -> Void)?
     /// Set by the app delegate from the explainer panel's phase.
-    @Published var isExplainerVideoPlaying = false
+    /// The explainer panel is on screen, in any phase (set from the panel
+    /// manager). The overlay pet steps aside, nudges wait, and "just do it"
+    /// won't click while it is up.
+    @Published var isExplainerPanelOpen = false
 
     /// hoot ended its reply with a question of its own and is waiting for
     /// the learner's next hold to answer it. A prediction defers the real
@@ -498,7 +501,7 @@ final class HootController: ObservableObject {
                 try? await cartesiaTTSClient.speakText(stepSentence)
                 if isCancelled() { session.stopReason = .cancelled; return }
             }
-            if isExplainerVideoPlaying { stop(.explainerPanelIsOpen); return }
+            if isExplainerPanelOpen { stop(.explainerPanelIsOpen); return }
             if stepIndex == 0 {
                 // From here on the cursor is hoot's; any drift is the learner's.
                 session.executor.noteCursorAsPlacedByHootNow()
@@ -854,7 +857,7 @@ final class HootController: ObservableObject {
             // ordinary walkthrough, pointing only.
             let questionAsksHootToDoIt = reviewTurn == nil && followUpQuestion == nil
                 && HootTutorPrompt.questionAsksHootToDoItForThem(questionText)
-            let startsJustDoItExecution = questionAsksHootToDoIt && HootWalkthroughExecutor.canPostMouseEvents && !isExplainerVideoPlaying
+            let startsJustDoItExecution = questionAsksHootToDoIt && HootWalkthroughExecutor.canPostMouseEvents && !isExplainerPanelOpen
             if startsJustDoItExecution {
                 userPromptWithVideoContext += "\n\n" + HootTutorPrompt.doItForMeDirective
                 print("🖱️ just do it asked")

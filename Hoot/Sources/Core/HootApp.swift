@@ -85,21 +85,22 @@ final class HootAppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // The panel has its own pet perched on it while a video plays or a
-        // sketch shows, so the overlay pet steps aside to avoid two pets.
-        explainerPanelManager.$explainerPanelPhase
-            .map { explainerPanelPhase -> Bool in
-                explainerPanelPhase.isShowingAPicture
-            }
+        // The panel has its own pet perched on it in every phase (the
+        // buddies play catch while it renders), and it sits in the corner
+        // where hoot dozes and nudges appear, so the overlay pet steps aside
+        // and nudges wait for as long as the panel is open at all. Keying
+        // this off "showing a picture" let a review nudge and the corner
+        // hoot pile onto the panel while a sketch was still rendering.
+        explainerPanelManager.$isExplainerPanelOpen
             .removeDuplicates()
-            .sink { [weak hootController] isPlayingVideo in
-                hootController?.isExplainerVideoPlaying = isPlayingVideo
+            .sink { [weak hootController] isExplainerPanelOpen in
+                hootController?.isExplainerPanelOpen = isExplainerPanelOpen
             }
             .store(in: &cancellables)
 
         explainerPanelManager.onExplainerPanelClosed = { [weak hootController] in
             guard let hootController else { return }
-            hootController.isExplainerVideoPlaying = false
+            hootController.isExplainerPanelOpen = false
             Task { await hootController.youTubeContextProvider.resumeVideoIfWePausedIt() }
         }
     }

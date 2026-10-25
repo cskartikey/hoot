@@ -318,7 +318,7 @@ final class NudgeCenter: ObservableObject {
         return hootController.voiceState != .idle
             || hootController.isAnswerPipelineRunning
             || hootController.isSpeakingResponseAloud
-            || hootController.isExplainerVideoPlaying
+            || hootController.isExplainerPanelOpen
     }
 
     private var isFrontmostAppFullscreen: Bool {

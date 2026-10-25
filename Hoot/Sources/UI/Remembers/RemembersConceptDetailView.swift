@@ -208,7 +208,7 @@ struct RemembersConceptDetailView: View {
     /// with a waveform while it plays) or "read answer" / "hide answer".
     private func replayOrReadButton(_ memoryEntry: MemoryEntry, isAnswerExpanded: Bool) -> some View {
         let hasPlayableVideo = memoryEntry.explainerVideoURL.map(RemembersWindowModel.isSavedVideoStillPlayable) ?? false
-        let isPlaying = hasPlayableVideo && model.replayingEntryId == memoryEntry.id && hootController.isExplainerVideoPlaying
+        let isPlaying = hasPlayableVideo && model.replayingEntryId == memoryEntry.id && hootController.isExplainerPanelOpen
         let titleText: String
         let symbolName: String
         let symbolColor: Color

@@ -157,7 +157,7 @@ final class PetOverlayCoordinator: ObservableObject {
     /// own perched hoot).
     var isCornerHootAllowed: Bool {
         hootController.isCornerPetEnabled
-            && !hootController.isExplainerVideoPlaying
+            && !hootController.isExplainerPanelOpen
             && !isFrontmostAppFullscreenOnPrimaryScreen
     }
 
