@@ -11,7 +11,9 @@ LaTeX IS installed. Two ways to write math:
   (`x^2`, `\theta`, `\frac{a}{b}` → `a/b`).
 - `tex(r"...")`: real LaTeX via MathTex. Use it when the typesetting carries meaning: stacked
   fractions `\frac{a}{b}`, sums and integrals with limits `\sum_{i=1}^{n}`, roots `\sqrt{x}`,
-  matrices `\begin{bmatrix} a & b \\ c & d \end{bmatrix}`, vectors `\vec{v}`, `\det(A)`.
+  matrices `\begin{bmatrix} a & b \\ c & d \end{bmatrix}`, vectors `\vec{v}`, `\det(A)`, and word subscripts or
+  superscripts (`\theta_{new}`, `w_{old}`, `x_{ij}`): Unicode only has small digits and a few letters, so `equation()`
+  draws those as plain `θ_new`.
   Rules that keep it rendering: ALWAYS a raw string `r"..."`; braces balanced; only standard
   amsmath/amssymb macros (`\frac \sqrt \sum \int \partial \cdot \times \alpha ... \mathbf \text{words}`);
   NO Unicode characters inside (write `\theta`, not `θ`; `^2`, not `²`); no `\usepackage`, no

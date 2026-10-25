@@ -117,13 +117,16 @@ snap = rate_functions.ease_out_back
 # =============================================================================================
 # Unicode math: turns simple LaTeX-ish input into plain text
 
+# Only glyphs Helvetica Neue (the SANS equation font) actually has, checked with
+# fc-list: a missing one renders as a tofu box ("θ▯ew" was seen in a demo video for
+# θ_new). Anything else falls back to the plain "_word" / "^word" form.
 _SUPERSCRIPTS = dict(zip(
-    "0123456789+-=()abcdefghijklmnoprstuvwxyzT",
-    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵀ",
+    "0123456789+-=()abdeghijklmnoprstuvwxy",
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵇᵈᵉᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸ",
 ))
 _SUBSCRIPTS = dict(zip(
-    "0123456789+-=()aehijklmnoprstuvx",
-    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ",
+    "0123456789+-=()aeioruvx",
+    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₒᵣᵤᵥₓ",
 ))
 
 _SYMBOLS = {
@@ -150,8 +153,9 @@ _STYLE_WRAPPERS = {"text", "mathrm", "mathbf", "mathit", "mathbb", "mathcal", "m
 _COMBINING = {"vec": "⃗", "hat": "̂", "bar": "̄"}
 
 
-def _read_group(s: str, i: int) -> tuple[str, int]:
-    """Read one argument at s[i]: a {braced group}, a \\command, or a single character."""
+def _read_group(s: str, i: int, whole_word: bool = False) -> tuple[str, int]:
+    """Read one argument at s[i]: a {braced group}, a \\command, or a single character
+    (a whole alphanumeric run when `whole_word`, for informal "θ_new" / "e^x" input)."""
     while i < len(s) and s[i] == " ":
         i += 1
     if i >= len(s):
@@ -160,6 +164,10 @@ def _read_group(s: str, i: int) -> tuple[str, int]:
         m = re.match(r"\\([A-Za-z]+|.)", s[i:])
         return m.group(0), i + len(m.group(0))
     if s[i] != "{":
+        if whole_word:
+            m = re.match(r"[A-Za-z0-9]+", s[i:])
+            if m:
+                return m.group(0), i + len(m.group(0))
         return s[i], i + 1
     depth = 0
     for j in range(i, len(s)):
@@ -175,7 +183,9 @@ def _read_group(s: str, i: int) -> tuple[str, int]:
 def _script(text: str, table: dict, marker: str) -> str:
     if text and all(c in table for c in text):
         return "".join(table[c] for c in text)
-    return f"{marker}({text})" if len(text) > 1 else f"{marker}{text}"
+    # No glyphs for it: keep the plain form. A single word stays bare ("θ_new",
+    # "e^x"); anything with operators or spaces gets parentheses.
+    return f"{marker}{text}" if re.fullmatch(r"[\w.]+", text) else f"{marker}({text})"
 
 
 def _atom(t: str) -> str:
@@ -212,7 +222,9 @@ def unicode_math(s: str) -> str:
             else:
                 res.append(_SYMBOLS.get(name, name))
         elif c in "^_":
-            arg, i = _read_group(s, i + 1)
+            # "θ_new" means the whole word in these informal inputs (LaTeX would
+            # take one letter), so read the run; braces still work as in LaTeX.
+            arg, i = _read_group(s, i + 1, whole_word=True)
             res.append(_script(unicode_math(arg), _SUPERSCRIPTS if c == "^" else _SUBSCRIPTS, c))
         elif c in "{}":
             i += 1
