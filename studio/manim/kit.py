@@ -4,9 +4,13 @@
 hoot app). Labels and code use JetBrains Mono (bundled in ./fonts); titles and body use the
 macOS system sans.
 
-There is no LaTeX on the render machine. All math is Unicode text, and importing this module
-replaces Manim's MathTex / Tex / DecimalNumber / Integer with Text-based versions, so library
-code (and stray model code) that reaches for them still renders.
+Math: `equation()` draws simple math as Unicode text (fast, house font). When a LaTeX
+toolchain is on the machine (`latex` + `dvisvgm`, found on PATH or in MacTeX's
+/Library/TeX/texbin), `tex()` and Manim's own MathTex / Tex / Matrix typeset real math
+(fractions, sums with limits, matrices). Without one, importing this module swaps MathTex / Tex
+for Text-based stand-ins so library code (and stray model code) still renders. DecimalNumber /
+Integer are always the Text-based versions: Manim's real ones re-typeset LaTeX on every frame
+of a counter, which is far too slow, and the Text ones match the house font.
 
     from manim import *
     from kit import *
@@ -18,6 +22,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -798,10 +803,41 @@ def budget(scene, t: float, fraction: float = 1.0) -> float:
 
 
 # =============================================================================================
-# LaTeX-free stand-ins for MathTex, Tex, DecimalNumber and Integer
+# LaTeX: real when the toolchain is here, Text-based stand-ins otherwise
+
+_MACTEX_BIN = "/Library/TeX/texbin"
 
 
-class MathTex(VGroup):
+def _find_latex_toolchain() -> bool:
+    """True when `latex` and `dvisvgm` can be run. MacTeX installs them outside the default
+    PATH of a process started from an app or a Node server, so that folder is added when
+    they are found there and nowhere else."""
+    if shutil.which("latex") and shutil.which("dvisvgm"):
+        return True
+    if all(os.path.exists(os.path.join(_MACTEX_BIN, tool)) for tool in ("latex", "dvisvgm")):
+        os.environ["PATH"] = _MACTEX_BIN + os.pathsep + os.environ.get("PATH", "")
+        return True
+    return False
+
+
+LATEX_AVAILABLE = _find_latex_toolchain()
+
+from manim.mobject.text import tex_mobject as _tex_mod  # noqa: E402  (after PATH is settled)
+
+if LATEX_AVAILABLE:
+    MathTex = _tex_mod.MathTex
+    Tex = _tex_mod.Tex
+    SingleStringMathTex = _tex_mod.SingleStringMathTex
+
+
+def tex(*tex_strings, size: float = 48, color: str = INK, t2c: dict | None = None) -> VGroup:
+    """Real typeset math (needs LaTeX; falls back to Unicode text otherwise). Always pass raw
+    strings: tex(r"\\frac{\\partial L}{\\partial w}"). Several strings become separately
+    colourable parts: tex(r"a^2", "+", r"b^2", t2c={"b^2": EMBER})."""
+    return MathTex(*tex_strings, font_size=size, color=color, tex_to_color_map=t2c or {})
+
+
+class _TextMathTex(VGroup):
     """Each string argument becomes one Text part (self[i]), drawn from its Unicode form."""
 
     def __init__(self, *tex_strings, color=INK, font_size: float = 48, tex_to_color_map=None,
@@ -843,12 +879,18 @@ class MathTex(VGroup):
         return self.tex_string
 
 
-class Tex(MathTex):
+class _TextTex(_TextMathTex):
     pass
 
 
-class SingleStringMathTex(MathTex):
+class _TextSingleStringMathTex(_TextMathTex):
     pass
+
+
+if not LATEX_AVAILABLE:
+    MathTex = _TextMathTex
+    Tex = _TextTex
+    SingleStringMathTex = _TextSingleStringMathTex
 
 
 class DecimalNumber(VGroup):
@@ -911,17 +953,22 @@ class Integer(DecimalNumber):
 
 
 def _install_latex_free_classes():
-    """Point every loaded Manim module at the stand-ins, including default arguments bound at import."""
+    """Point every loaded Manim module at the stand-ins, including default arguments bound at
+    import. The number classes are always swapped (see the module docstring); the Tex classes
+    only when there is no LaTeX."""
     from manim.mobject.text import numbers as num_mod
     from manim.mobject.text import tex_mobject as tex_mod
 
     swap = {
-        tex_mod.MathTex: MathTex,
-        tex_mod.Tex: Tex,
-        tex_mod.SingleStringMathTex: SingleStringMathTex,
         num_mod.DecimalNumber: DecimalNumber,
         num_mod.Integer: Integer,
     }
+    if not LATEX_AVAILABLE:
+        swap.update({
+            tex_mod.MathTex: MathTex,
+            tex_mod.Tex: Tex,
+            tex_mod.SingleStringMathTex: SingleStringMathTex,
+        })
     seen: set[int] = set()
 
     def fix_defaults(fn):
@@ -954,6 +1001,6 @@ _install_latex_free_classes()
 __all__ = [
     name for name in dir()
     if not name.startswith("_")
-    and name not in {"annotations", "inspect", "json", "os", "re", "sys", "Path", "manimpango",
+    and name not in {"annotations", "inspect", "json", "os", "re", "shutil", "sys", "Path", "manimpango",
                      "rate_functions"}
 ] + ["np"]

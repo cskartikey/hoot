@@ -3,15 +3,26 @@
 Frame: 1280x720, 16:9. Scene units: x from -7.1 to 7.1, y from -4 to 4. Keep everything inside
 x ∈ [-6.5, 6.5], y ∈ [-3.6, 3.6]. Headings sit at y = 3.4 (`TOP_Y`). Background is dark (`BG`).
 
-## No LaTeX
-LaTeX is NOT installed. Never use `MathTex`, `Tex`, `Matrix`, `DecimalNumber`, `Integer`,
-`include_numbers=True`, `add_coordinates()`, `BraceLabel`, or `Brace.get_tex()`. Write math as
-Unicode text with `equation()`: `x²`, `√2`, `∫ f(x) dx`, `θ`, `π`, `Σ`, `→`, `≤`, `≈`, `·`, `×`,
-`Δ`, `∂`, `∇`, `ŷ`, subscripts `x₁ x₂ aᵢ`. `equation()` also converts simple LaTeX-ish input
-(`x^2`, `\theta`, `\frac{a}{b}` → `a/b`). `Brace(mob, DOWN)` itself is fine; label it with `label_at`.
-(As a safety net the kit swaps MathTex/Tex/DecimalNumber/Integer for Text-based versions, so a stray
-one renders, but it looks plainer than `equation()` and the kit helpers.) To show a
-changing number, `Transform` one `mono(...)` into the next.
+## Math: `equation()` for simple, `tex()` for real typesetting
+LaTeX IS installed. Two ways to write math:
+- `equation("x² + y² = r²")`: Unicode text in the house font, instant. Use it for anything that fits
+  on one line with plain symbols: `x²`, `√2`, `∫ f(x) dx`, `θ`, `π`, `Σ`, `→`, `≤`, `≈`, `·`, `×`,
+  `Δ`, `∂`, `∇`, subscripts `x₁ x₂ aᵢ`. It also converts simple LaTeX-ish input
+  (`x^2`, `\theta`, `\frac{a}{b}` → `a/b`).
+- `tex(r"...")`: real LaTeX via MathTex. Use it when the typesetting carries meaning: stacked
+  fractions `\frac{a}{b}`, sums and integrals with limits `\sum_{i=1}^{n}`, roots `\sqrt{x}`,
+  matrices `\begin{bmatrix} a & b \\ c & d \end{bmatrix}`, vectors `\vec{v}`, `\det(A)`.
+  Rules that keep it rendering: ALWAYS a raw string `r"..."`; braces balanced; only standard
+  amsmath/amssymb macros (`\frac \sqrt \sum \int \partial \cdot \times \alpha ... \mathbf \text{words}`);
+  NO Unicode characters inside (write `\theta`, not `θ`; `^2`, not `²`); no `\usepackage`, no
+  `\newcommand`, no `\\` line breaks outside a matrix environment, no `$`. Several strings become
+  separately colourable parts: `tex(r"a^2", "+", r"b^2", t2c={"b^2": EMBER})`; colour a part later
+  with `.set_color_by_tex("b^2", EMBER)`. Manim's `MathTex`, `Tex`, `Matrix([[1, 2], [3, 4]])`,
+  `BraceLabel`, `get_graph_label(graph, label="f(x)")`, `include_numbers=True` and
+  `add_coordinates()` also work. Keep tex strings short: a wrong one fails the whole render. Never mix `equation()` and `tex()` inside one
+  equation (two fonts); if any part needs tex, the whole equation is one `tex(...)` with several parts.
+`DecimalNumber` / `Integer` are the kit's fast Text-based versions (fine with `ValueTracker`
+updaters). To show a changing number you can also `Transform` one `mono(...)` into the next.
 
 ## Palette (hex strings, same as the hoot app)
 `BG` #161617 background, `BG2` card fill, `LINE` dividers / grid, `INK` #F2F2F7 main text, `MUTED`
@@ -29,6 +40,7 @@ Mono. If a mono string trips Manim's glyph count (ligatures like `==`), the kit 
 - `body(text, size=32, color=INK)`: sentences. Use `\n` to break lines; ≤ 40 chars per line.
 - `mono(text, size=28, color=INK)`: code, numbers.
 - `equation(text, size=48, color=INK, t2c={"x²": EMBER})`: math as Unicode. Alias `eq`.
+- `tex(*raw_strings, size=48, color=INK, t2c=None)`: real LaTeX (a MathTex, so a VGroup of parts, not a Text).
 - `heading(text, size=44)`: title already placed at the top of the frame.
 - `title_card(text, subtitle=None)`: centered title + short ember bar (+ muted subtitle). VGroup.
 - `label_at(target, text, direction=UP, color=INK, size=28)`: label next to a mobject or point,

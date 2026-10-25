@@ -11,9 +11,10 @@ const id = process.argv[2];
 const dir = join(OUT_DIR, id);
 const beats = JSON.parse(await readFile(join(dir, 'beats.json'), 'utf8')).beats;
 
-// 1. Break a good scene the way models often do, then ask for a fix.
+// 1. Break a good scene the way models often do (a tex string with an unbalanced brace is a
+//    LaTeX compile error, the new failure mode now that LaTeX is installed), then ask for a fix.
 const good = await readFile(join(dir, 'scene_1.py'), 'utf8');
-const broken = good.replace(/def construct\(self\):\n/, 'def construct(self):\n        lbl = MathTex(r"\\det(A)=0").next_to(ORIGIN, UP, buf=0.3)\n        self.play(Write(lbl, run_time=1)\n');
+const broken = good.replace(/def construct\(self\):\n/, 'def construct(self):\n        lbl = tex(r"\\frac{\\det(A)}").next_to(ORIGIN, UP, buff=0.3)\n        self.play(Write(lbl), run_time=1)\n');
 await writeFile(join(dir, 'broken.py'), broken);
 const r1 = await renderScene(join(dir, 'broken.py'), join(dir, 'media_broken'));
 console.log('broken renders?', r1.ok, '\n', r1.error?.split('\n').slice(-4).join('\n'));

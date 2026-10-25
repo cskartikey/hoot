@@ -50,7 +50,7 @@ export async function fixScene(code: string, error: string): Promise<string> {
   const user = read(join(PROMPTS_DIR, 'fix.md')).replace('{{ERROR}}', error).replace('{{CODE}}', code);
   const text = await complete({
     label: 'fix',
-    system: 'You fix Manim Community Edition scenes so they render. LaTeX is not installed. Reply with code only.\n\n' +
+    system: 'You fix Manim Community Edition scenes so they render. LaTeX is installed (tex strings must be raw, balanced, standard amsmath, no Unicode inside). Reply with code only.\n\n' +
       read(join(MANIM_DIR, 'KIT_API.md')),
     user,
     maxTokens: 6000,

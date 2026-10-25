@@ -11,7 +11,7 @@ A typical job takes 35-55 s end to end (script ~10 s, voice ~1 s, scene code ~20
 
 ## Run
 
-Needs Node 22+, pnpm, [uv](https://docs.astral.sh/uv/), ffmpeg/ffprobe, and Cairo/Pango (`brew install pkg-config cairo pango`). LaTeX is **not** needed: the kit draws all math as Unicode text.
+Needs Node 22+, pnpm, [uv](https://docs.astral.sh/uv/), ffmpeg/ffprobe, and Cairo/Pango (`brew install pkg-config cairo pango`). LaTeX (MacTeX, `latex` + `dvisvgm`) is optional: with it, `tex()` / `MathTex` typeset real fractions, sums and matrices; without it the kit draws all math as Unicode text and swaps MathTex/Tex for Text-based stand-ins.
 
 ```sh
 cd studio
@@ -127,7 +127,7 @@ src/jobs.ts              in-memory jobs with an event log
 src/llm.ts               OpenAI / Anthropic switch
 src/pipeline/            script, voice, scene, render, mux, index (orchestration)
 src/prompts/             script.md, scene.md, fix.md
-manim/kit.py             16:9 style kit (written at Cal Hacks 13.0): hoot palette, helpers, MathTex/DecimalNumber→Text shims
+manim/kit.py             16:9 style kit (written at Cal Hacks 13.0): hoot palette, helpers, `tex()` (real LaTeX when installed, else Text stand-ins), DecimalNumber→Text shims
 manim/fonts/             JetBrains Mono (OFL), same files as the app
 manim/KIT_API.md         kit docs pasted into the scene prompt
 manim/templates/*.py     transform, derivation, process, compare (few-shot examples)
@@ -144,7 +144,7 @@ out/<jobId>/             per-job files: script, beats, audio, scene_N.py, error_
 ## Known limitations
 
 - Jobs live in memory; finished mp4s are still served from `out/` after a restart.
-- No LaTeX: math is Unicode text, so stacked fractions and big matrices are drawn as `a/b` and the kit's `matrix()`.
+- A bad tex string (unbalanced braces, Unicode inside, exotic macros) fails the render; the fix-retry usually repairs it, and the fallback scene uses no LaTeX. Without LaTeX installed, math is Unicode text and fractions are drawn as `a/b`.
 - The scene model can still produce layouts with small overlaps; the prompt asks for a region plan and the kit has `fit`/`keep_in_frame`, but nothing checks the frames.
 - Renders run in parallel with no queue; several jobs at once share the CPU.
 - `POST /explain/:id/continue` from the plan is not built yet.

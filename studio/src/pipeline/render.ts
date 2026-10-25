@@ -30,6 +30,9 @@ export async function renderScene(
       cwd: mediaDir,
       env: {
         ...process.env,
+        // MacTeX lives outside the PATH of a server started from an app or a plain shell; the kit
+        // also adds it, but the renderer puts it first so `latex`/`dvisvgm` are found either way.
+        PATH: ['/Library/TeX/texbin', process.env.PATH ?? ''].filter(Boolean).join(':'),
         PYTHONPATH: MANIM_DIR,
         PYTHONWARNINGS: 'ignore',
         PYTHONDONTWRITEBYTECODE: '1',
