@@ -61,6 +61,7 @@ enum HootTutorPrompt {
     three ways to show something, at most one per reply. if they ask for a specific one, do exactly that: "draw on my screen", "draw it", "sketch it", "scribble" mean a napkin; "animate it", "show me it moving" mean a sketch; "make a video", "show me a video" mean a video. otherwise choose for them:
     - first ask: is the point of the picture something moving? if your explanation is about something squishing, flattening, collapsing, rotating, sliding, growing, shrinking, sweeping or walking along, that is a sketch, not a napkin: a napkin can't move, and a before-and-after of a motion loses the very thing you're explaining. "why does a zero determinant squish everything" is a sketch.
     - napkin by default for everything that holds still: boxes and arrows, how two things relate, a number line, a vector, a tree, a stack, a lookup, a layout, parts of a whole. most pictures that aren't about motion are napkins.
+    - run this test on every teaching answer: does your explanation name two or more things and how they connect (a key going into a function going into a slot; a caller and a callee; a parent and its children; input, step, output)? if yes, draw the napkin. it costs them nothing, it appears while you talk, and a diagram beside the words is how the idea sticks. "they've asked before" or "it's a simple idea" are not reasons to skip it. skip pictures only for a single-fact answer, a definition a sentence settles, chit-chat, a quick-check grade, a guess prompt, or a walkthrough.
     - video only for an equation building up step by step, many stages in sequence, or a real simulation.
     for all three, say something like "let me draw this out" in your spoken reply. never two picture mediums in one reply; a napkin counts as one.
     if they ask you to draw, animate, visualize, show them, or make a video, always include a picture, even if you'd otherwise skip it.
@@ -133,6 +134,28 @@ enum HootTutorPrompt {
         no sketch, no video and no new check this time. end with [REVIEW:remembered], [REVIEW:shaky] or [REVIEW:forgot], then [CONCEPT:none] [POINT:none].
         if their message isn't an answer at all but a new question, answer that question the normal way with the normal tags and use [REVIEW:none].
         """
+    }
+
+    /// One line appended to the user prompt when the learner named a picture
+    /// medium out loud, so the choice is enforced rather than hoped for:
+    /// the model occasionally forgets an explicit "make a video" or
+    /// "draw it" while the prose rules compete.
+    static func explicitPictureDirective(forQuestion questionText: String) -> String? {
+        let loweredQuestion = questionText.lowercased()
+        func mentionsAny(_ phrases: [String]) -> Bool { phrases.contains { loweredQuestion.contains($0) } }
+        if mentionsAny(["make a video", "make me a video", "show me a video", "as a video", "a video of", "video please"]) {
+            return "(they asked for a video out loud: you must include a [VIDEO:brief] tag this time, nothing else for the picture.)"
+        }
+        if mentionsAny(["animate", "animation", "show me it moving", "show it moving", "moving picture"]) {
+            return "(they asked for an animation out loud: you must include a [SKETCH:brief] tag this time, nothing else for the picture.)"
+        }
+        if mentionsAny(["draw on my screen", "draw it on", "draw on the screen", "sketch it", "sketch this", "scribble", "draw it", "draw this", "draw me", "draw that", "napkin"]) {
+            return "(they asked you to draw out loud: you must include a [NAPKIN:...] block this time, nothing else for the picture.)"
+        }
+        if mentionsAny(["visualize", "visualise", "show me how it looks", "picture of", "diagram"]) {
+            return "(they asked for a picture out loud: you must include exactly one picture this time, a [NAPKIN:...] block unless motion is the point.)"
+        }
+        return nil
     }
 
     /// Appended when the "quick checks" setting is on.

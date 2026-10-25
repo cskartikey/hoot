@@ -205,6 +205,19 @@ enum HootResponseTags {
         return trimmedQuestion
     }
 
+    /// Every tag name in the reply, in order of first appearance, for the
+    /// console ("VIDEO CONCEPT POINT DRAW").
+    static func tagNames(in responseText: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([A-Z]+)"#) else { return [] }
+        var seenTagNames: [String] = []
+        for match in regex.matches(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) {
+            guard let nameRange = Range(match.range(at: 1), in: responseText) else { continue }
+            let tagName = String(responseText[nameRange])
+            if !seenTagNames.contains(tagName) { seenTagNames.append(tagName) }
+        }
+        return seenTagNames
+    }
+
     /// The grade from [REVIEW:remembered|shaky|forgot], or nil.
     static func parseReviewResult(from responseText: String) -> ReviewResult? {
         guard let rawReviewResult = firstTagValue(named: "REVIEW", in: responseText) else { return nil }

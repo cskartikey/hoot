@@ -376,6 +376,9 @@ final class HootController: ObservableObject {
             capturedScreens: capturedScreens,
             pointingLocation: pointingLocation
         ) else {
+            if responseText.range(of: "[NAPKIN", options: .caseInsensitive) != nil {
+                print("⚠️ Napkin block present but nothing usable was parsed from it")
+            }
             if napkinSketch != nil { napkinSketch = nil }
             return
         }
@@ -564,6 +567,10 @@ final class HootController: ObservableObject {
                 userPromptWithVideoContext = Self.userTextForReviewAnswer(questionText, reviewTurn: reviewTurn)
             } else if let followUpQuestion {
                 userPromptWithVideoContext = Self.userTextForFollowUpAnswer(questionText, followUpQuestion: followUpQuestion)
+            } else if let explicitPictureDirective = HootTutorPrompt.explicitPictureDirective(forQuestion: questionText) {
+                // An explicit "draw it" / "make a video" is enforced, not left
+                // to the prose rules in the system prompt.
+                userPromptWithVideoContext += "\n\n" + explicitPictureDirective
             }
             var youTubeContextForExplainerVideo: StudioYouTubeContext?
             var memoryRecallQueryLines = [questionText]
@@ -647,6 +654,9 @@ final class HootController: ObservableObject {
             // Pull out the picture request ([SKETCH:...] or [VIDEO:...]) first,
             // then the pointing tag from what is left.
             let spokenText = HootResponseTags.speakableText(from: fullResponseText)
+            // Which tags came back, so a missing picture or check is diagnosable
+            // from the console without reading the whole reply.
+            print("🏷️ tags: \(HootResponseTags.tagNames(in: fullResponseText).joined(separator: " "))")
             let explainerVideoParseResult = HootResponseTags.parseExplainerVideoRequest(from: fullResponseText)
             let sketchParseResult = HootResponseTags.parseSketchRequest(from: explainerVideoParseResult.textWithoutVideoTag)
             let responseTextWithoutPictureTags = sketchParseResult.textWithoutSketchTag
