@@ -19,7 +19,7 @@ export function resolveTTSProvider(requested?: string): TTSProvider {
 }
 
 // Lowest-latency ElevenLabs model the account can use; same one the worker's /tts uses.
-const ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
+const ELEVENLABS_MODEL_ID = 'eleven_v4';
 
 async function fetchCartesiaClip(text: string): Promise<Response> {
   return fetch('https://api.cartesia.ai/tts/bytes', {
