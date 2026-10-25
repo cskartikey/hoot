@@ -22,6 +22,10 @@ nonisolated struct StudioExplainRequestBody: Encodable {
     let spokenAnswer: String
     let context: StudioExplainContext
     let memory: [StudioMemoryEntry]
+    /// "cartesia" or "elevenlabs": the narration provider picked in settings,
+    /// so the explainer video speaks with the same voice provider as hoot.
+    /// Omitted (nil) lets the studio fall back to its own STUDIO_TTS_PROVIDER.
+    var ttsProvider: String? = nil
 }
 
 nonisolated struct StudioExplainContext: Encodable {

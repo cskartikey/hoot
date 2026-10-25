@@ -39,6 +39,11 @@ export const env = {
   anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-opus-5-5',
   cartesiaKey: process.env.CARTESIA_API_KEY || '',
   cartesiaVoice: process.env.CARTESIA_VOICE_ID || 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4',
+  // Narration provider when the /explain request doesn't name one: 'cartesia' (default) or 'elevenlabs'.
+  ttsProvider: ((process.env.STUDIO_TTS_PROVIDER || 'cartesia').toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'cartesia') as 'cartesia' | 'elevenlabs',
+  elevenLabsKey: process.env.ELEVENLABS_API_KEY || '',
+  // "clear educator" (Alice), the app's default ElevenLabs voice.
+  elevenLabsVoice: process.env.ELEVENLABS_VOICE_ID || 'Xb7hH8MSUJpSbSDYk0k2',
   mossProjectId: process.env.MOSS_PROJECT_ID || '',
   mossProjectKey: process.env.MOSS_PROJECT_KEY || '',
   mossMemoryIndex: process.env.MOSS_MEMORY_INDEX || 'hoot-memory',
@@ -52,6 +57,8 @@ export function keyStatus() {
     openai: Boolean(env.openaiKey),
     anthropic: Boolean(env.anthropicKey),
     cartesia: Boolean(env.cartesiaKey),
+    elevenlabs: Boolean(env.elevenLabsKey),
+    ttsProvider: env.ttsProvider,
     moss: Boolean(env.mossProjectId && env.mossProjectKey),
   };
 }

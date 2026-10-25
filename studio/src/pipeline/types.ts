@@ -8,7 +8,11 @@ export interface ExplainRequest {
     screenText?: string;
   };
   memory?: { concept: string; summary: string }[];
+  /** Who narrates the beats. Falls back to STUDIO_TTS_PROVIDER, then Cartesia. */
+  ttsProvider?: TTSProvider;
 }
+
+export type TTSProvider = 'cartesia' | 'elevenlabs';
 
 export interface Beat {
   id: number;

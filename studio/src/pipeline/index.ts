@@ -8,7 +8,7 @@ import { renderScene, type RenderResult } from './render.js';
 import { fixScene, writeScene } from './scene.js';
 import { writeScript } from './script.js';
 import type { ExplainRequest, Script } from './types.js';
-import { voiceBeats } from './voice.js';
+import { resolveTTSProvider, voiceBeats } from './voice.js';
 
 const MAX_FIXES = 2;
 const RENDER_TIMEOUT_MS = 90_000;
@@ -39,7 +39,9 @@ export async function runJob(job: Job, req: ExplainRequest): Promise<void> {
     // 2. Voice
     emit(job, 'stage', { stage: 'voice', label: 'Recording narration' });
     t = Date.now();
-    const beats = await voiceBeats(script.beats, dir);
+    const ttsProvider = resolveTTSProvider(req.ttsProvider);
+    job.ttsProvider = ttsProvider;
+    const beats = await voiceBeats(script.beats, dir, ttsProvider);
     mark('voice', t);
     await writeFile(
       join(dir, 'beats.json'),
@@ -106,7 +108,7 @@ export async function runJob(job: Job, req: ExplainRequest): Promise<void> {
     mark('mux', t);
     job.videoPath = videoPath;
     job.timings.total = round((Date.now() - t0) / 1000);
-    await writeFile(join(dir, 'job.json'), JSON.stringify({ outcome: job.outcome, attempts: job.attempts, timings: job.timings, errors: job.errors }, null, 2));
+    await writeFile(join(dir, 'job.json'), JSON.stringify({ outcome: job.outcome, attempts: job.attempts, ttsProvider: job.ttsProvider, timings: job.timings, errors: job.errors }, null, 2));
     console.log(`[job ${job.id}] done in ${job.timings.total}s (${job.outcome}, ${duration}s video)`);
     emit(job, 'done', {
       url: `${env.publicBase}/jobs/${job.id}/video.mp4`,

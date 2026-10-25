@@ -237,7 +237,8 @@ final class ExplainerPanelManager: ObservableObject {
             brief: explainerVideoRequest.brief,
             spokenAnswer: explainerVideoRequest.spokenAnswer,
             context: StudioExplainContext(app: frontmostApplicationName, youtube: explainerVideoRequest.youTubeContext, screenText: nil),
-            memory: []
+            memory: [],
+            ttsProvider: WaitWhatVoiceSettingsStore.shared.selectedVoiceProvider.workerRequestValue
         )
 
         activeStudioJobTask = Task { [weak self] in

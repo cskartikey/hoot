@@ -38,6 +38,8 @@ Read at startup from the process env, then `studio/.env`, then the repo's `worke
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | `gpt-6.1-sol` | Chat Completions with `reasoning_effort` |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | `claude-opus-5-5` | Messages API, adaptive thinking |
 | `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` | | Sonic 3.6, same voice as the app |
+| `STUDIO_TTS_PROVIDER` | `cartesia` | `cartesia` or `elevenlabs`; a `ttsProvider` field in the `/explain` body overrides it per job |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | Alice (`Xb7hH8MSUJpSbSDYk0k2`) | Flash v2.5 narration when the provider is `elevenlabs` |
 | `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY` | | Moss memory search (optional; see "Moss") |
 | `MOSS_MEMORY_INDEX` | `hoot-memory` | Moss index / session name |
 | `STUDIO_PORT` | `7777` | |
@@ -55,7 +57,7 @@ Read at startup from the process env, then `studio/.env`, then the repo's `worke
                "screenText": "…" },
   "memory": [{ "concept": "linear transformation", "summary": "…" }] }
 ```
-Only `question` is required. Returns `{"jobId":"abc123"}` immediately.
+Only `question` is required. An optional `"ttsProvider": "elevenlabs"` narrates this job with ElevenLabs (see Environment). Returns `{"jobId":"abc123"}` immediately.
 
 ### `GET /jobs/:id/events` (Server-Sent Events)
 Replays everything so far, then streams until `done` or `error`, then closes.

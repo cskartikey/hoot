@@ -234,12 +234,16 @@ final class CartesiaTTSClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
 
+        let voiceSettingsStore = WaitWhatVoiceSettingsStore.shared
         let body: [String: Any] = [
             "text": text,
-            // The voice and speed picked in the panel's settings. The worker
-            // forwards these to Cartesia (voice id + generation_config.speed).
-            "voice_id": WaitWhatVoiceSettingsStore.shared.selectedVoice.cartesiaVoiceID,
-            "speed": WaitWhatVoiceSettingsStore.shared.speakingSpeed
+            // The provider, voice and speed picked in the panel's settings. The
+            // worker forwards these to Cartesia (voice id + generation_config.speed)
+            // or ElevenLabs (voice id + voice_settings.speed); both answer with
+            // the same mp3, so playback below is unchanged.
+            "provider": voiceSettingsStore.selectedVoiceProvider.workerRequestValue,
+            "voice_id": voiceSettingsStore.selectedVoiceIDForTTSRequest,
+            "speed": voiceSettingsStore.speakingSpeed
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -257,7 +261,7 @@ final class CartesiaTTSClient {
                           userInfo: [NSLocalizedDescriptionKey: "TTS API error (\(httpResponse.statusCode)): \(errorBody)"])
         }
 
-        print("🔊 Cartesia TTS: \(data.count / 1024)KB for \"\(text.prefix(40))\"")
+        print("🔊 \(voiceSettingsStore.selectedVoiceProvider.displayName) TTS: \(data.count / 1024)KB for \"\(text.prefix(40))\"")
         return data
     }
 }

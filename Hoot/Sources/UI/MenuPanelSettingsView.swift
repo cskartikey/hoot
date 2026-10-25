@@ -2,7 +2,8 @@
 //  MenuPanelSettingsView.swift
 //  Hoot
 //
-//  Screen 3 of the crisp design, pushed from home: model, voice + speed,
+//  Screen 3 of the crisp design, pushed from home: model, voice (provider,
+//  voice + speed),
 //  buddy (+ "always visible"), appearance, memory (count, nudges, review
 //  demo mode, forget everything), and the permissions summary.
 //  Picking a buddy or an appearance re-themes the whole app at once,
@@ -92,6 +93,16 @@ struct MenuPanelSettingsView: View {
     private var voiceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             MenuPanelSectionLabel(labelText: "voice", theme: theme)
+            // Cartesia is the default live voice; ElevenLabs is the alternative.
+            // The picker below lists whichever provider's voices are selected.
+            MenuPanelSegmentedControl(
+                optionTitles: WaitWhatVoiceProvider.allCases.map(\.displayName),
+                selectedOptionIndex: WaitWhatVoiceProvider.allCases.firstIndex(of: voiceSettingsStore.selectedVoiceProvider) ?? 0,
+                theme: theme,
+                onSelectOptionIndex: { selectedOptionIndex in
+                    voiceSettingsStore.selectedVoiceProvider = WaitWhatVoiceProvider.allCases[selectedOptionIndex]
+                }
+            )
             voiceSelectField
             if isVoiceListExpanded {
                 voiceOptionList
@@ -121,7 +132,7 @@ struct MenuPanelSettingsView: View {
         HStack(spacing: 8) {
             Button(action: toggleVoiceList) {
                 HStack {
-                    Text(voiceSettingsStore.selectedVoice.displayName)
+                    Text(voiceSettingsStore.selectedVoiceDisplayName)
                         .font(.system(size: 13))
                         .foregroundColor(theme.ink)
                     Spacer(minLength: 0)
@@ -160,6 +171,9 @@ struct MenuPanelSettingsView: View {
     }
 
     private func toggleVoiceList() {
+        if voiceSettingsStore.selectedVoiceProvider == .elevenLabs {
+            voiceSettingsStore.loadElevenLabsVoicesIfNeeded()
+        }
         withAnimation(.easeInOut(duration: 0.2)) {
             isVoiceListExpanded.toggle()
         }
@@ -167,26 +181,22 @@ struct MenuPanelSettingsView: View {
 
     private var voiceOptionList: some View {
         VStack(spacing: 0) {
-            ForEach(WaitWhatVoice.allCases) { voiceOption in
-                MenuPanelHoverButton(theme: theme, action: {
-                    voiceSettingsStore.selectedVoice = voiceOption
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isVoiceListExpanded = false
-                    }
-                }) {
-                    HStack {
-                        Text(voiceOption.displayName)
-                            .font(.system(size: 13))
-                            .foregroundColor(theme.ink)
-                        Spacer()
-                        if voiceOption == voiceSettingsStore.selectedVoice {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(theme.accent)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
+            switch voiceSettingsStore.selectedVoiceProvider {
+            case .cartesia:
+                ForEach(WaitWhatVoice.allCases) { voiceOption in
+                    voiceOptionRow(
+                        titleText: voiceOption.displayName,
+                        isSelected: voiceOption == voiceSettingsStore.selectedVoice,
+                        onSelect: { voiceSettingsStore.selectedVoice = voiceOption }
+                    )
+                }
+            case .elevenLabs:
+                ForEach(voiceSettingsStore.elevenLabsVoices) { voiceOption in
+                    voiceOptionRow(
+                        titleText: voiceOption.name,
+                        isSelected: voiceOption.id == voiceSettingsStore.selectedElevenLabsVoice.id,
+                        onSelect: { voiceSettingsStore.selectedElevenLabsVoiceID = voiceOption.id }
+                    )
                 }
             }
         }
@@ -195,6 +205,30 @@ struct MenuPanelSettingsView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(theme.foreground(opacity: 0.04))
         )
+    }
+
+    /// One row of the voice list; picking it closes the list.
+    private func voiceOptionRow(titleText: String, isSelected: Bool, onSelect: @escaping () -> Void) -> some View {
+        MenuPanelHoverButton(theme: theme, action: {
+            onSelect()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isVoiceListExpanded = false
+            }
+        }) {
+            HStack {
+                Text(titleText)
+                    .font(.system(size: 13))
+                    .foregroundColor(theme.ink)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+        }
     }
 
     // MARK: - Buddy

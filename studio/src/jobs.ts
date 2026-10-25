@@ -13,6 +13,7 @@ export interface Job {
   // Diagnostics (GET /jobs/:id, test runner)
   outcome?: 'first' | 'fixed' | 'fallback';
   attempts?: number;
+  ttsProvider?: 'cartesia' | 'elevenlabs';
   timings: Record<string, number>;
   errors: string[];
 }
